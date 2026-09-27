@@ -63,7 +63,20 @@ class TcxParser
     }
 
     /**
-     * Разбирает одну точку TCX.
+     * Разбирает одну точку TCX, включая метрики датчиков.
+     *
+     * Поля TCX v2:
+     *   <Time>
+     *   <Position><LatitudeDegrees>…</Position>
+     *   <AltitudeMeters>
+     *   <HeartRateBpm><Value>…</Value></HeartRateBpm>
+     *   <Cadence>
+     *   <Extensions>
+     *     <TPX xmlns="http://www.garmin.com/xmlschemas/ActivityExtension/v2">
+     *       <Watts>…</Watts>
+     *       <Temp>…</Temp>
+     *     </TPX>
+     *   </Extensions>
      */
     private static function parseTrackpoint(SimpleXMLElement $tp): ?array
     {
@@ -91,11 +104,81 @@ class TcxParser
             if ($t !== false && $t > 0) $time = $t;
         }
 
+        // ---- Пульс ----
+        $hr = null;
+        if (isset($tp->HeartRateBpm->Value)) {
+            $v = (int)$tp->HeartRateBpm->Value;
+            if ($v > 0 && $v < 250) $hr = $v;
+        }
+
+        // ---- Каденс ----
+        $cad = null;
+        if (isset($tp->Cadence)) {
+            $v = (int)$tp->Cadence;
+            if ($v > 0 && $v < 300) $cad = $v;
+        }
+
+        // ---- Мощность и температура (в Extensions/TPX) ----
+        $pwr  = null;
+        $temp = null;
+
+        if (isset($tp->Extensions)) {
+            self::readExtensions($tp->Extensions, $pwr, $temp);
+        }
+
         return [
-            'lat' => round($lat, 6),
-            'lng' => round($lng, 6),
-            'ele' => $ele,
-            't'   => $time,
+            'lat'  => round($lat, 6),
+            'lng'  => round($lng, 6),
+            'ele'  => $ele,
+            't'    => $time,
+            'hr'   => $hr,
+            'cad'  => $cad,
+            'pwr'  => $pwr,
+            'temp' => $temp,
         ];
+    }
+
+    /**
+     * Читает Extensions/TPX: мощность и температуру.
+     *
+     * Разные версии TCX используют разные namespace'ы, поэтому пробуем несколько:
+     *   - http://www.garmin.com/xmlschemas/ActivityExtension/v2
+     *   - http://www.garmin.com/xmlschemas/ActivityExtension/v1
+     *   - http://www.garmin.com/xmlschemas/ActivityExtension/v2 (без суффикса)
+     */
+    private static function readExtensions(
+        SimpleXMLElement $extensions,
+        ?int &$pwr,
+        ?float &$temp
+    ): void {
+        $namespaces = [
+            'http://www.garmin.com/xmlschemas/ActivityExtension/v2',
+            'http://www.garmin.com/xmlschemas/ActivityExtension/v1',
+        ];
+
+        foreach ($namespaces as $ns) {
+            $ext = $extensions->children($ns);
+
+            if ($pwr === null && isset($ext->TPX->Watts)) {
+                $v = (int)$ext->TPX->Watts;
+                if ($v > 0 && $v < 2500) $pwr = $v;
+            }
+            if ($temp === null && isset($ext->TPX->Temp)) {
+                $v = (float)$ext->TPX->Temp;
+                if ($v > -50 && $v < 60) $temp = $v;
+            }
+
+            if ($pwr !== null && $temp !== null) return;
+        }
+
+        // Fallback: некоторые экспортёры пишут Extensions без namespace
+        if ($pwr === null && isset($extensions->TPX->Watts)) {
+            $v = (int)$extensions->TPX->Watts;
+            if ($v > 0 && $v < 2500) $pwr = $v;
+        }
+        if ($temp === null && isset($extensions->TPX->Temp)) {
+            $v = (float)$extensions->TPX->Temp;
+            if ($v > -50 && $v < 60) $temp = $v;
+        }
     }
 }

@@ -7,7 +7,8 @@ require_once __DIR__ . '/GpxParser.php';
  * Парсер FIT-файлов (Garmin).
  *
  * Реализован «чистый» разбор бинарного формата FIT без внешних библиотек.
- * Поддерживает запись типа "record" (позиция, высота, время).
+ * Поддерживает запись типа "record" (позиция, высота, время, пульс, каденс,
+ * мощность, температура).
  * Не поддерживает: developer fields, compressed timestamp headers,
  * события, круги — этого достаточно для трека.
  */
@@ -99,8 +100,6 @@ class FitParser
 
             // ---- Data record ----
             if (!isset($definitions[$localNum])) {
-                // Неизвестный local number — не можем определить длину
-                // Это признак битого файла, дальше парсить нельзя.
                 break;
             }
 
@@ -151,17 +150,23 @@ class FitParser
      *   0   — position_lat (semicircles, sint32)
      *   1   — position_long (semicircles, sint32)
      *   2   — altitude (uint16, scale 5, offset 500)
-     *   3   — heart_rate
-     *   4   — cadence
+     *   3   — heart_rate (uint8, bpm)
+     *   4   — cadence (uint8, rpm)
      *   5   — distance (uint32, scale 100)
-     *   6   — speed (uint16, scale 1000)
+     *   6   — speed (uint16, scale 1000, м/с)
+     *   7   — power (uint16, W)
+     *   13  — temperature (sint8, °C)
      */
     private static function readRecord(string $data, int $offset, array $fields): ?array
     {
-        $lat = null;
-        $lng = null;
-        $ele = null;
+        $lat  = null;
+        $lng  = null;
+        $ele  = null;
         $time = null;
+        $hr   = null;
+        $cad  = null;
+        $pwr  = null;
+        $temp = null;
 
         foreach ($fields as $f) {
             $raw = substr($data, $offset, $f['size']);
@@ -172,8 +177,7 @@ class FitParser
             switch ($f['num']) {
                 case 253: // timestamp
                     $v = self::uintFromBytes($raw);
-                    if ($v !== null) {
-                        // FIT time = секунды с 1989-12-31
+                    if ($v !== null && $v !== 0xFFFFFFFF) {
                         $time = self::FIT_EPOCH + $v;
                     }
                     break;
@@ -199,7 +203,33 @@ class FitParser
                     }
                     break;
 
-                // Остальные поля пропускаем — они нам пока не нужны
+                case 3: // heart_rate (uint8)
+                    $v = self::uintFromBytes($raw);
+                    if ($v !== null && $v !== 0xFF && $v > 0 && $v < 250) {
+                        $hr = $v;
+                    }
+                    break;
+
+                case 4: // cadence (uint8)
+                    $v = self::uintFromBytes($raw);
+                    if ($v !== null && $v !== 0xFF && $v > 0 && $v < 300) {
+                        $cad = $v;
+                    }
+                    break;
+
+                case 7: // power (uint16, W)
+                    $v = self::uintFromBytes($raw);
+                    if ($v !== null && $v !== 0xFFFF && $v > 0 && $v < 2500) {
+                        $pwr = $v;
+                    }
+                    break;
+
+                case 13: // temperature (sint8, °C)
+                    $v = self::sintFromBytes($raw);
+                    if ($v !== null && $v !== 0x7F && $v > -50 && $v < 60) {
+                        $temp = (float)$v;
+                    }
+                    break;
             }
         }
 
@@ -207,10 +237,14 @@ class FitParser
         if ($lat < -90 || $lat > 90 || $lng < -180 || $lng > 180) return null;
 
         return [
-            'lat' => round($lat, 6),
-            'lng' => round($lng, 6),
-            'ele' => $ele,
-            't'   => $time,
+            'lat'  => round($lat, 6),
+            'lng'  => round($lng, 6),
+            'ele'  => $ele,
+            't'    => $time,
+            'hr'   => $hr,
+            'cad'  => $cad,
+            'pwr'  => $pwr,
+            'temp' => $temp,
         ];
     }
 
@@ -226,12 +260,11 @@ class FitParser
         for ($i = 0; $i < $len; $i++) {
             $v |= (ord($bytes[$i]) << (8 * $i));
         }
-        // Для 4 байт это 32-битное значение — в PHP оно уже положительное
         return $v;
     }
 
     /**
-     * Читает знаковое целое (sint32) из массива байт.
+     * Читает знаковое целое (sint32/sint16/sint8) из массива байт.
      */
     private static function sintFromBytes(string $bytes): ?int
     {
@@ -251,7 +284,7 @@ class FitParser
     }
 
     /**
-     * uint16/uint32 из потока с учётом архитектуры (big-endian).
+     * uint16 из потока с учётом архитектуры (big-endian).
      */
     private static function u16(string $data, int $offset, bool $bigEndian = false): int
     {
