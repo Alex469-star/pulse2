@@ -152,6 +152,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'gear_id'          => $gearId,
                         'track_json'       => json_encode($points, JSON_UNESCAPED_UNICODE),
                         'visibility'       => $old['visibility'],
+                        'avg_hr'      => $parsed['avg_hr']      ?? null,
+'max_hr'      => $parsed['max_hr']      ?? null,
+'avg_cadence' => $parsed['avg_cadence'] ?? null,
+'max_cadence' => $parsed['max_cadence'] ?? null,
+'avg_power_w' => $parsed['avg_power_w'] ?? null,
+'max_power_w' => $parsed['max_power_w'] ?? null,
+'avg_temp_c'  => $parsed['avg_temp_c']  ?? null,
+'has_sensors' => $parsed['has_sensors'] ?? 0,
                     ]);
 
                     // Загрузка фото (только к первой активности)

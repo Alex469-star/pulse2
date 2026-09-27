@@ -683,6 +683,7 @@ require __DIR__ . '/includes/header.php';
                     <span class="sidebar-user__name"><?= e($me['display_name']) ?></span>
                     <span class="sidebar-user__meta">@<?= e($me['username']) ?></span>
                 </span>
+				
             </a>
             <div class="sidebar-user__stats">
                 <a href="<?= e(url('profile.php?u=' . urlencode((string)$me['username']))) ?>" class="sidebar-user__stat">
@@ -918,14 +919,14 @@ require __DIR__ . '/includes/header.php';
                             </a>
 
                             <?php if ($postPhotos): ?>
-                                <div class="post-card__photos post-card__photos--<?= count($postPhotos) === 1 ? 'single' : 'multi' ?>">
-                                    <?php foreach ($postPhotos as $ph): ?>
-                                        <a href="<?= e(url('post.php?id=' . $pid)) ?>" class="post-card__photo">
-                                            <img src="<?= e($ph['url']) ?>" alt="">
-                                        </a>
-                                    <?php endforeach; ?>
-                                </div>
-                            <?php endif; ?>
+    <div class="post-card__photos post-card__photos--<?= count($postPhotos) === 1 ? 'single' : 'multi' ?>">
+        <?php foreach ($postPhotos as $ph): ?>
+            <a href="<?= e(url('post.php?id=' . $pid)) ?>" class="post-card__photo">
+                <img src="<?= e($ph['url']) ?>" alt="">
+            </a>
+        <?php endforeach; ?>
+    </div>
+<?php endif; ?>
 
                             <div class="post-card__body">
                                 <?= nl2br(e(mb_substr((string)$r['description'], 0, 400))) ?><?= mb_strlen((string)$r['description']) > 400 ? '…' : '' ?>

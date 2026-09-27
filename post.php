@@ -123,14 +123,39 @@ require __DIR__ . '/includes/header.php';
     </header>
 
     <?php if ($photos): ?>
-        <div class="post-page__photos post-page__photos--<?= count($photos) === 1 ? 'single' : 'multi' ?>">
-            <?php foreach ($photos as $ph): ?>
-                <a href="<?= e($ph['url']) ?>" target="_blank" class="post-page__photo">
-                    <img src="<?= e($ph['url']) ?>" alt="">
-                </a>
-            <?php endforeach; ?>
+    <div class="post-carousel" data-count="<?= count($photos) ?>">
+        <div class="post-carousel__viewport">
+            <div class="post-carousel__track" id="post-carousel-track">
+                <?php foreach ($photos as $i => $ph): ?>
+                    <button type="button"
+                            class="post-carousel__slide"
+                            data-lightbox="post"
+                            data-index="<?= $i ?>"
+                            data-src="<?= e($ph['url']) ?>"
+                            aria-label="Открыть фото <?= $i + 1 ?> из <?= count($photos) ?>">
+                        <img src="<?= e($ph['url']) ?>" alt="" loading="lazy">
+                    </button>
+                <?php endforeach; ?>
+            </div>
+
+            <?php if (count($photos) > 1): ?>
+                <button type="button" class="post-carousel__nav post-carousel__nav--prev" aria-label="Предыдущее фото">‹</button>
+                <button type="button" class="post-carousel__nav post-carousel__nav--next" aria-label="Следующее фото">›</button>
+            <?php endif; ?>
         </div>
-    <?php endif; ?>
+
+        <?php if (count($photos) > 1): ?>
+            <div class="post-carousel__dots" role="tablist">
+                <?php foreach ($photos as $i => $ph): ?>
+                    <button type="button"
+                            class="post-carousel__dot <?= $i === 0 ? 'is-active' : '' ?>"
+                            data-index="<?= $i ?>"
+                            aria-label="Перейти к фото <?= $i + 1 ?>"></button>
+                <?php endforeach; ?>
+            </div>
+        <?php endif; ?>
+    </div>
+<?php endif; ?>
 
     <div class="post-page__body">
         <?= nl2br(e((string)$post['body'])) ?>
