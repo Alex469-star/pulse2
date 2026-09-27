@@ -1,0 +1,9 @@
+{
+    "name": "pulse/sport-platform",
+    "description": "Pulse — социальная платформа для спортсменов",
+    "type": "project",
+    "require": {
+        "php": ">=8.1",
+        "phpmailer/phpmailer": "^7.1"
+    }
+    }
