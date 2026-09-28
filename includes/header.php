@@ -60,8 +60,7 @@ if ($me) {
                 <a href="<?= e(url('segments.php')) ?>" class="nav__link <?= is_current('segments.php') ?>">Сегменты</a>
                 <a href="<?= e(url('gear.php')) ?>" class="nav__link <?= is_current('gear.php') ?>">Инвентарь</a>
             <?php else: ?>
-                <a href="<?= e(url('index.php#features')) ?>" class="nav__link">Возможности</a>
-                <a href="<?= e(url('index.php#activities')) ?>" class="nav__link">Активности</a>
+                
             <?php endif; ?>
         </nav>
 
