@@ -1,15 +1,11 @@
 <?php
 declare(strict_types=1);
 
-ini_set('display_errors', '1');
-ini_set('display_startup_errors', '1');
-error_reporting(E_ALL);
-
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/models/Segment.php';
 
 auth_start();
-$me = current_user();
+$me = require_login();
 
 // ---- Фильтры ----
 $type  = (string)($_GET['type'] ?? '');
@@ -22,7 +18,7 @@ if (!in_array($type, $allowedTypes, true)) $type = '';
 $allowedSort = ['new', 'popular', 'longest'];
 if (!in_array($sort, $allowedSort, true)) $sort = 'new';
 
-// ---- Загрузка ----
+// ---- Загрузка: только сегменты текущего пользователя ----
 $segments = [];
 $error = null;
 
@@ -32,7 +28,7 @@ try {
                    (SELECT COUNT(*) FROM segment_efforts e WHERE e.segment_id = s.id) AS efforts
             FROM segments s
             JOIN users u ON u.id = s.creator_id
-            WHERE s.is_public = 1';
+            WHERE s.creator_id = :me_id';
 
     $params = [];
 
@@ -50,9 +46,12 @@ try {
     $sql .= ' LIMIT :lim';
 
     $stmt = db()->prepare($sql);
+    $stmt->bindValue(':me_id', (int)$me['id'], PDO::PARAM_INT);
+
     foreach ($params as $k => $v) {
         $stmt->bindValue($k, $v, PDO::PARAM_STR);
     }
+
     $stmt->bindValue(':lim', $limit, PDO::PARAM_INT);
     $stmt->execute();
     $segments = $stmt->fetchAll();
@@ -97,9 +96,8 @@ foreach ($segments as $s) {
     $tracksById[(int)$s['id']] = $points;
 }
 
-$pageTitle = 'Сегменты';
+$pageTitle = 'Мои сегменты';
 
-// Leaflet подключаем через footer
 $extraCss = ['https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'];
 $extraJs  = ['https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'];
 
@@ -184,12 +182,10 @@ function segment_type_label(string $type): string
 <section class="segments-page">
     <header class="segments-page__head">
         <div>
-            <h1 class="section-title" style="text-align:left;margin-bottom:4px">Сегменты</h1>
-            <p class="muted">Участки, где спортсмены соревнуются на время</p>
+            <h1 class="section-title" style="text-align:left;margin-bottom:4px">Мои сегменты</h1>
+            <p class="muted">Участки, которые вы создали</p>
         </div>
-        <?php if ($me): ?>
-            <a href="<?= e(url('segment-create.php')) ?>" class="btn btn--primary">+ Создать сегмент</a>
-        <?php endif; ?>
+        <a href="<?= e(url('segment-create.php')) ?>" class="btn btn--primary">+ Создать сегмент</a>
     </header>
 
     <?php if ($error !== null): ?>
@@ -230,10 +226,12 @@ function segment_type_label(string $type): string
 
     <?php if (!$segments): ?>
         <div class="empty">
-            <p><?= $type !== '' ? 'Сегментов такого типа пока нет.' : 'Пока нет публичных сегментов.' ?></p>
-            <?php if ($me): ?>
-                <a href="<?= e(url('segment-create.php')) ?>" class="btn btn--primary">Создать первый сегмент</a>
-            <?php endif; ?>
+            <p>
+                <?= $type !== ''
+                    ? 'У вас нет сегментов такого типа.'
+                    : 'У вас пока нет сегментов.' ?>
+            </p>
+            <a href="<?= e(url('segment-create.php')) ?>" class="btn btn--primary">Создать первый сегмент</a>
         </div>
     <?php else: ?>
         <p class="muted" style="margin-bottom:16px">Найдено сегментов: <strong><?= count($segments) ?></strong></p>
@@ -242,7 +240,6 @@ function segment_type_label(string $type): string
             <?php foreach ($segments as $s): ?>
                 <?php $hasTrack = !empty($tracksById[(int)$s['id']]); ?>
                 <a class="segment-card" href="<?= e(url('segment.php?id=' . (int)$s['id'])) ?>">
-                    <!-- Миниатюра карты -->
                     <div class="segment-card__thumb-wrap">
                         <?php if ($hasTrack): ?>
                             <div class="segment-thumb"
@@ -261,7 +258,6 @@ function segment_type_label(string $type): string
                         </span>
                     </div>
 
-                    <!-- Тело -->
                     <div class="segment-card__body">
                         <h3 class="segment-card__title"><?= e($s['name']) ?></h3>
 
@@ -287,7 +283,7 @@ function segment_type_label(string $type): string
                         </div>
 
                         <div class="segment-card__footer">
-                            <span class="muted">от @<?= e($s['username']) ?></span>
+                            <span class="muted"><?= e(time_ago((string)$s['created_at'])) ?></span>
                             <span class="segment-card__cta">Открыть →</span>
                         </div>
                     </div>

@@ -1034,90 +1034,91 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
         <?php endif; ?>
 
 <?php if ($activityPhotos): ?>
-            <div class="activity-card">
-                <h2 class="activity-card__title">Фотографии (<?= count($activityPhotos) ?>)</h2>
-                <div class="activity-gallery" id="activity-gallery">
-                    <?php foreach ($activityPhotos as $i => $ph): ?>
-                        <button type="button"
-                                class="activity-gallery__item"
-                                data-index="<?= $i ?>"
-                                data-photo-url="<?= e($ph['url']) ?>"
-                                aria-label="Открыть фото <?= $i + 1 ?> из <?= count($activityPhotos) ?>">
-                            <img src="<?= e($ph['url']) ?>" alt="" loading="lazy">
-                        </button>
-                    <?php endforeach; ?>
+    <div class="activity-card">
+        <h2 class="activity-card__title">Фотографии (<?= count($activityPhotos) ?>)</h2>
+        <div class="activity-gallery" id="activity-gallery">
+            <?php foreach ($activityPhotos as $i => $ph): ?>
+                <button type="button"
+                        class="activity-gallery__item"
+                        data-index="<?= $i ?>"
+                        data-photo-url="<?= e($ph['url']) ?>"
+                        aria-label="Открыть фото <?= $i + 1 ?> из <?= count($activityPhotos) ?>">
+                    <img src="<?= e($ph['url']) ?>" alt="" loading="lazy">
+                </button>
+            <?php endforeach; ?>
+        </div>
+    </div>
+<?php endif; ?>
+
+<?php if ($track): ?>
+    <div class="activity-card">
+        <div id="activity-map" class="map"></div>
+    </div>
+<?php else: ?>
+    <div class="activity-card activity-card--empty">
+        <span class="muted">Эта активность без GPS-трека</span>
+    </div>
+<?php endif; ?>
+
+<?php if ($elevData || $speedData || $hrData || $pwrData || $cadData): ?>
+    <div class="activity-charts">
+        <?php if ($elevData): ?>
+            <div class="chart-card">
+                <div class="chart-card__head">
+                    <h2 class="chart-card__title">⛰️ Профиль высот</h2>
+                    <div class="chart-card__stats" id="elev-stats"></div>
                 </div>
-            </div>
-
-        <?php if ($track): ?>
-            <div class="activity-card">
-                <div id="activity-map" class="map"></div>
-            </div>
-        <?php else: ?>
-            <div class="activity-card activity-card--empty">
-                <span class="muted">Эта активность без GPS-трека</span>
+                <div class="chart-card__body"><canvas id="elev-chart"></canvas></div>
             </div>
         <?php endif; ?>
-
-        <?php if ($elevData || $speedData || $hrData || $pwrData || $cadData): ?>
-            <div class="activity-charts">
-                <?php if ($elevData): ?>
-                    <div class="chart-card">
-                        <div class="chart-card__head">
-                            <h2 class="chart-card__title">⛰️ Профиль высот</h2>
-                            <div class="chart-card__stats" id="elev-stats"></div>
-                        </div>
-                        <div class="chart-card__body"><canvas id="elev-chart"></canvas></div>
-                    </div>
-                <?php endif; ?>
-                <?php if ($speedData): ?>
-                    <div class="chart-card">
-                        <div class="chart-card__head">
-                            <h2 class="chart-card__title">⚡ Скорость</h2>
-                            <div class="chart-card__stats" id="speed-stats"></div>
-                        </div>
-                        <div class="chart-card__body"><canvas id="speed-chart"></canvas></div>
-                    </div>
-                <?php endif; ?>
-                <?php if ($hrData): ?>
-                    <div class="chart-card">
-                        <div class="chart-card__head">
-                            <h2 class="chart-card__title">❤️ Пульс</h2>
-                            <div class="chart-card__stats" id="hr-stats"></div>
-                        </div>
-                        <div class="chart-card__body"><canvas id="hr-chart"></canvas></div>
-                    </div>
-                <?php endif; ?>
-                <?php if ($pwrData): ?>
-                    <div class="chart-card">
-                        <div class="chart-card__head">
-                            <h2 class="chart-card__title">⚡ Мощность</h2>
-                            <div class="chart-card__stats" id="pwr-stats"></div>
-                        </div>
-                        <div class="chart-card__body"><canvas id="pwr-chart"></canvas></div>
-                    </div>
-                <?php endif; ?>
-                <?php if ($cadData): ?>
-                    <div class="chart-card">
-                        <div class="chart-card__head">
-                            <h2 class="chart-card__title">🔄 Каденс</h2>
-                            <div class="chart-card__stats" id="cad-stats"></div>
-                        </div>
-                        <div class="chart-card__body"><canvas id="cad-chart"></canvas></div>
-                    </div>
-                <?php endif; ?>
+        <?php if ($speedData): ?>
+            <div class="chart-card">
+                <div class="chart-card__head">
+                    <h2 class="chart-card__title">⚡ Скорость</h2>
+                    <div class="chart-card__stats" id="speed-stats"></div>
+                </div>
+                <div class="chart-card__body"><canvas id="speed-chart"></canvas></div>
             </div>
         <?php endif; ?>
-
-                
-            <div class="lightbox" id="lightbox" hidden>
-                <button type="button" class="lightbox__close" id="lightbox-close" aria-label="Закрыть">×</button>
-                <button type="button" class="lightbox__prev" id="lightbox-prev" aria-label="Предыдущее">‹</button>
-                <button type="button" class="lightbox__next" id="lightbox-next" aria-label="Следующее">›</button>
-                <div class="lightbox__counter" id="lightbox-counter"></div>
-                <div class="lightbox__img-wrap"><img src="" alt="" id="lightbox-img"></div>
+        <?php if ($hrData): ?>
+            <div class="chart-card">
+                <div class="chart-card__head">
+                    <h2 class="chart-card__title">❤️ Пульс</h2>
+                    <div class="chart-card__stats" id="hr-stats"></div>
+                </div>
+                <div class="chart-card__body"><canvas id="hr-chart"></canvas></div>
             </div>
         <?php endif; ?>
+        <?php if ($pwrData): ?>
+            <div class="chart-card">
+                <div class="chart-card__head">
+                    <h2 class="chart-card__title">⚡ Мощность</h2>
+                    <div class="chart-card__stats" id="pwr-stats"></div>
+                </div>
+                <div class="chart-card__body"><canvas id="pwr-chart"></canvas></div>
+            </div>
+        <?php endif; ?>
+        <?php if ($cadData): ?>
+            <div class="chart-card">
+                <div class="chart-card__head">
+                    <h2 class="chart-card__title">🔄 Каденс</h2>
+                    <div class="chart-card__stats" id="cad-stats"></div>
+                </div>
+                <div class="chart-card__body"><canvas id="cad-chart"></canvas></div>
+            </div>
+        <?php endif; ?>
+    </div>
+<?php endif; ?>
+
+<?php if ($activityPhotos): ?>
+    <div class="lightbox" id="lightbox" hidden>
+        <button type="button" class="lightbox__close" id="lightbox-close" aria-label="Закрыть">×</button>
+        <button type="button" class="lightbox__prev" id="lightbox-prev" aria-label="Предыдущее">‹</button>
+        <button type="button" class="lightbox__next" id="lightbox-next" aria-label="Следующее">›</button>
+        <div class="lightbox__counter" id="lightbox-counter"></div>
+        <div class="lightbox__img-wrap"><img src="" alt="" id="lightbox-img"></div>
+    </div>
+<?php endif; ?>
 
         <?php if ($segments): ?>
             <div class="activity-card">

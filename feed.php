@@ -1,10 +1,6 @@
 <?php
 declare(strict_types=1);
 
-ini_set('display_errors', '1');
-ini_set('display_startup_errors', '1');
-error_reporting(E_ALL);
-
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/models/Activity.php';
 require_once __DIR__ . '/models/Post.php';
@@ -911,7 +907,7 @@ require __DIR__ . '/includes/header.php';
                                         </span>
                                     </span>
                                 </a>
-                                <span class="activity-type activity-type--post">📖 Запись</span>
+                                
                             </div>
 
                             <a href="<?= e(url('post.php?id=' . $pid)) ?>" class="post-card__title-link">
