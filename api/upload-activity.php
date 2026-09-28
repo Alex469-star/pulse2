@@ -3,73 +3,72 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/_bootstrap.php';
 require_once __DIR__ . '/../models/Activity.php';
+require_once __DIR__ . '/../models/Gear.php';
 require_once __DIR__ . '/../services/GpxParser.php';
 require_once __DIR__ . '/../services/TcxParser.php';
+require_once __DIR__ . '/../services/FitParser.php';
 
-// Поддерживаем только POST
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    json_err('Method not allowed', 405);
-}
-
-// Авторизация: Bearer или сессия
+api_check_csrf();
 $me = api_require_user();
 
-$errors  = [];
-$activityId = null;
+$allowedExt = ['gpx', 'tcx', 'fit'];
+$maxSize    = 25 * 1024 * 1024;
 
-// ---- Параметры ----
-$title       = trim((string)($_POST['title'] ?? ''));
-$type        = (string)($_POST['type'] ?? 'run');
-$visibility  = (string)($_POST['visibility'] ?? 'public');
-$description = trim((string)($_POST['description'] ?? '')) ?: null;
-
-$allowedTypes = ['run','ride','swim','ski','walk','hike','other'];
-if (!in_array($type, $allowedTypes, true)) $type = 'run';
-
-$allowedVis = ['public','followers','private'];
-if (!in_array($visibility, $allowedVis, true)) $visibility = 'public';
-
-// ---- Файл ----
-if (empty($_FILES['file']['tmp_name'])) {
-    json_err('Файл активности обязателен (поле "file")', 400);
+if (empty($_FILES['file']) || ($_FILES['file']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+    json_err('Файл не был загружен', 400);
 }
 
 $file = $_FILES['file'];
+$originalName = (string)($file['name'] ?? 'file');
 
-if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
-    json_err('Ошибка загрузки файла: код ' . (int)$file['error'], 400);
-}
-
-if (($file['size'] ?? 0) > 25 * 1024 * 1024) {
+if ((int)$file['size'] > $maxSize) {
     json_err('Файл больше 25 МБ', 400);
 }
 
-$originalName = (string)($file['name'] ?? 'activity');
 $ext = strtolower((string)pathinfo($originalName, PATHINFO_EXTENSION));
-
-if (!in_array($ext, ['gpx', 'tcx'], true)) {
-    json_err('Поддерживаются только GPX и TCX', 400);
+if (!in_array($ext, $allowedExt, true)) {
+    json_err('Недопустимое расширение: ' . $ext, 400);
 }
 
 if (!is_uploaded_file($file['tmp_name'])) {
     json_err('Файл не был загружен через HTTP', 400);
 }
 
-// ---- Парсинг ----
+// Параметры из формы
+$title      = trim((string)($_POST['title'] ?? ''));
+$type       = (string)($_POST['type'] ?? 'run');
+$visibility = (string)($_POST['visibility'] ?? 'public');
+$gearId     = (int)($_POST['gear_id'] ?? 0);
+$isMulti    = !empty($_POST['is_multi']);
+
+$allowedTypes = ['run','ride','swim','ski','walk','hike','other'];
+if (!in_array($type, $allowedTypes, true)) $type = 'run';
+
+$allowedVisibility = ['public','followers','private'];
+if (!in_array($visibility, $allowedVisibility, true)) $visibility = 'public';
+
+// Проверяем gear_id
+$gear = null;
+if ($gearId > 0) {
+    $g = Gear::findById($gearId);
+    if ($g && (int)$g['user_id'] === (int)$me['id']) {
+        $gear = $gearId;
+    }
+}
+
+// Парсим файл
 try {
     $parsed = match ($ext) {
         'gpx' => GpxParser::parse($file['tmp_name']),
         'tcx' => TcxParser::parse($file['tmp_name']),
+        'fit' => FitParser::parse($file['tmp_name']),
+        default => throw new RuntimeException('Неподдерживаемый формат'),
     };
-} catch (Throwable $e) {
-    json_err('Ошибка парсинга: ' . $e->getMessage(), 400);
+} catch (Throwable $ex) {
+    json_err($ex->getMessage(), 400);
 }
 
-if (empty($parsed['points']) || count($parsed['points']) < 2) {
-    json_err('В файле нет GPS-точек', 400);
-}
-
-// ---- Уменьшаем трек, если слишком много точек ----
+// Прореживаем трек при необходимости
 $points = $parsed['points'];
 if (count($points) > 20000) {
     $step = (int)ceil(count($points) / 20000);
@@ -83,45 +82,49 @@ if (count($points) > 20000) {
     $points = $reduced;
 }
 
-// ---- Название по умолчанию ----
-if ($title === '') {
-    $title = pathinfo($originalName, PATHINFO_FILENAME);
-    $title = mb_substr($title, 0, 190);
-}
+// Заголовок
+$fileBase = pathinfo($originalName, PATHINFO_FILENAME);
+$finalTitle = $title !== ''
+    ? ($isMulti ? $title . ' — ' . $fileBase : $title)
+    : $fileBase;
+$finalTitle = mb_substr($finalTitle, 0, 190);
 
-// ---- Сохраняем ----
+// Сохраняем активность
 try {
     $activityId = Activity::create((int)$me['id'], [
         'type'             => $type,
-        'title'            => $title,
-        'description'      => $description,
+        'title'            => $finalTitle,
+        'description'      => null,
         'started_at'       => $parsed['started_at'],
         'duration_sec'     => $parsed['duration_sec'],
         'distance_m'       => $parsed['distance_m'],
         'elevation_gain_m' => $parsed['elevation_gain_m'],
         'avg_speed_mps'    => $parsed['avg_speed_mps'],
         'max_speed_mps'    => $parsed['max_speed_mps'],
-        'gear_id'          => null,
+        'gear_id'          => $gear,
         'track_json'       => json_encode($points, JSON_UNESCAPED_UNICODE),
         'visibility'       => $visibility,
+        'avg_hr'           => $parsed['avg_hr']      ?? null,
+        'max_hr'           => $parsed['max_hr']      ?? null,
+        'avg_cadence'      => $parsed['avg_cadence'] ?? null,
+        'max_cadence'      => $parsed['max_cadence'] ?? null,
+        'avg_power_w'      => $parsed['avg_power_w'] ?? null,
+        'max_power_w'      => $parsed['max_power_w'] ?? null,
+        'avg_temp_c'       => $parsed['avg_temp_c']  ?? null,
+        'has_sensors'      => $parsed['has_sensors'] ?? 0,
     ]);
-} catch (Throwable $e) {
-    json_err('Не удалось сохранить: ' . $e->getMessage(), 500);
+} catch (Throwable $ex) {
+    json_err('Ошибка сохранения: ' . $ex->getMessage(), 500);
 }
 
-// ---- Ответ ----
 json_ok([
     'activity_id' => $activityId,
-    'url'         => app_url('activity.php?id=' . $activityId),
-    'summary' => [
-        'title'            => $title,
-        'type'             => $type,
+    'title'       => $finalTitle,
+    'summary'     => [
         'distance_m'       => $parsed['distance_m'],
         'duration_sec'     => $parsed['duration_sec'],
         'elevation_gain_m' => $parsed['elevation_gain_m'],
-        'avg_speed_mps'    => $parsed['avg_speed_mps'],
-        'max_speed_mps'    => $parsed['max_speed_mps'],
-        'started_at'       => $parsed['started_at'],
         'points'           => count($points),
+        'has_sensors'      => (int)($parsed['has_sensors'] ?? 0),
     ],
-], 201);
+]);
