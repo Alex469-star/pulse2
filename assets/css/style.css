@@ -6628,3 +6628,621 @@ body.route-create-page {
     .activity-card .map { height: 320px; }
     .activity-layout { padding: 0 16px; }
 }
+
+/* ============ UPLOAD PROGRESS ============ */
+.upload-progress {
+    margin-top: 14px;
+    padding: 14px 16px;
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.upload-progress__bar-wrap {
+    height: 8px;
+    background: #e6e9ef;
+    border-radius: 999px;
+    overflow: hidden;
+}
+
+.upload-progress__bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    border-radius: 999px;
+    transition: width .2s ease;
+}
+
+.upload-progress__text {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.upload-progress__hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Кнопка в состоянии загрузки */
+form button[type="submit"][disabled] {
+    opacity: .7;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+/* HEIC-прогресс */
+.heic-progress {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: #fff8e6;
+    border: 1px solid #ffe7a8;
+    border-radius: var(--radius);
+    margin-top: 12px;
+    font-size: 14px;
+    color: #8b5a00;
+}
+.heic-progress__spinner {
+    width: 18px;
+    height: 18px;
+    border: 2px solid rgba(139,90,0,.2);
+    border-top-color: #8b5a00;
+    border-radius: 50%;
+    animation: uploadSpin .8s linear infinite;
+}
+
+@keyframes uploadSpin {
+    to { transform: rotate(360deg); }
+}
+
+/* Результаты (уже есть в style.css — на всякий случай) */
+#upload-results { margin-bottom: 20px; }
+
+
+/* ============ HERO FULL-WIDTH С ФОНОВОЙ КАРТИНКОЙ ============ */
+.hero-full {
+    position: relative;
+    width: 100%;
+    min-height: 640px;
+    display: flex;
+    align-items: center;
+    padding: 80px 24px 100px;
+    overflow: hidden;
+
+    /* Картинка растягивается на всю ширину окна */
+    background-image: url('/pulse/assets/img/hero-bg.jpg');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+/* Вуаль, чтобы текст и форма читались поверх любой картинки */
+.hero-full__overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background: linear-gradient(
+        90deg,
+        rgba(255,255,255,.92) 0%,
+        rgba(255,255,255,.82) 45%,
+        rgba(255,255,255,.55) 100%
+    );
+    pointer-events: none;
+}
+
+/* Контент центрируется внутри секции, но сама секция — от края до края */
+.hero-full__inner {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+    gap: 56px;
+    align-items: center;
+    width: 100%;
+    max-width: var(--container);
+    margin: 0 auto;
+}
+
+.hero-full__text { min-width: 0; }
+
+.hero-full__title {
+    font-size: clamp(32px, 4.6vw, 56px);
+    line-height: 1.05;
+    font-weight: 800;
+    letter-spacing: -.03em;
+    margin: 18px 0 20px;
+}
+.hero-full__title .accent {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+.hero-full__subtitle {
+    font-size: 17px;
+    color: var(--text-muted);
+    max-width: 560px;
+    margin-bottom: 8px;
+}
+
+.hero-full__list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-top: 24px;
+    font-size: 15px;
+    color: var(--text);
+}
+.hero-full__list li {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    line-height: 1.5;
+}
+
+/* Правая колонка — форма */
+.hero-full__form {
+    min-width: 0;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.hero-full__form .login-card {
+    width: 100%;
+    max-width: 420px;
+    padding: 28px;
+    background: rgba(255,255,255,.96);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+}
+
+.login-card__title {
+    font-size: 22px;
+    font-weight: 800;
+    margin: 0 0 6px;
+    letter-spacing: -.01em;
+}
+
+.login-card__subtitle {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin-bottom: 18px;
+}
+.login-card__subtitle a { color: var(--accent); font-weight: 600; }
+
+.hero-full__form .login-card .field { margin-bottom: 14px; }
+.hero-full__form .login-card .btn { margin-top: 6px; }
+
+.login-card__footer {
+    margin-top: 14px;
+    text-align: center;
+    font-size: 13px;
+}
+.login-card__footer a { color: var(--text-muted); }
+.login-card__footer a:hover { color: var(--accent); }
+
+/* ============ АДАПТИВ ============ */
+@media (max-width: 900px) {
+    .hero-full {
+        padding: 48px 20px 64px;
+        min-height: 0;
+        background-position: center top;
+    }
+    .hero-full__overlay {
+        background: linear-gradient(
+            180deg,
+            rgba(255,255,255,.90) 0%,
+            rgba(255,255,255,.80) 50%,
+            rgba(255,255,255,.92) 100%
+        );
+    }
+    .hero-full__inner {
+        grid-template-columns: 1fr;
+        gap: 32px;
+    }
+    .hero-full__form { justify-content: stretch; }
+    .hero-full__form .login-card { max-width: 100%; }
+}
+
+@media (max-width: 560px) {
+    .hero-full { padding: 32px 16px 48px; }
+    .hero-full__form .login-card { padding: 22px; }
+    .hero-full__list { font-size: 14px; }
+}
+
+/* ============ CAL GOAL ============ */
+.cal-goal {
+    padding: 20px 22px;
+    background: linear-gradient(135deg, #fff6ef, #fff);
+    border: 1px solid rgba(255,90,31,.25);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 24px;
+}
+.cal-goal__head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+}
+.cal-goal__title {
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: -.01em;
+    margin: 0;
+}
+.cal-goal__row {
+    display: grid;
+    grid-template-columns: 100px 1fr auto;
+    gap: 14px;
+    align-items: center;
+    margin-bottom: 10px;
+}
+.cal-goal__row:last-child { margin-bottom: 0; }
+.cal-goal__label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-muted);
+}
+.cal-goal__bar {
+    height: 10px;
+    background: #f0e6df;
+    border-radius: 999px;
+    overflow: hidden;
+}
+.cal-goal__fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    border-radius: 999px;
+    transition: width .3s;
+}
+.cal-goal__fill--alt {
+    background: linear-gradient(90deg, #1f5fc4, #7c3aed);
+}
+.cal-goal__value {
+    font-size: 13px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+.cal-goal__value strong { color: var(--text); font-weight: 800; }
+
+@media (max-width: 640px) {
+    .cal-goal__row {
+        grid-template-columns: 1fr;
+        gap: 6px;
+    }
+    .cal-goal__value { text-align: right; }
+}
+
+/* ============ CAL PERIODS ============ */
+.cal-periods {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+}
+.cal-period {
+    background: #fff;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.cal-period__label {
+    font-size: 11px;
+    color: var(--text-soft);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    font-weight: 700;
+}
+.cal-period__main {
+    font-size: 24px;
+    font-weight: 800;
+    letter-spacing: -.02em;
+    color: var(--text);
+}
+.cal-period__sub {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+.cal-period__sub strong { color: var(--text); }
+
+@media (max-width: 720px) {
+    .cal-periods { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 480px) {
+    .cal-periods { grid-template-columns: 1fr; }
+}
+
+/* ============ CAL COMPARE ============ */
+.cal-compare {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 16px 20px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+}
+.cal-compare__row {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    gap: 14px;
+    align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px dashed var(--border);
+}
+.cal-compare__row:last-child { border-bottom: none; }
+.cal-compare__label {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+}
+.cal-compare__current {
+    font-size: 15px;
+    font-weight: 800;
+    color: var(--text);
+}
+.cal-compare__prev {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+.cal-compare__diff {
+    font-size: 13px;
+    font-weight: 800;
+    padding: 4px 10px;
+    border-radius: 999px;
+}
+.cal-compare__diff.is-up {
+    color: #0a7a3a;
+    background: #eaffef;
+}
+.cal-compare__diff.is-down {
+    color: #b3261e;
+    background: #fff0ef;
+}
+
+@media (max-width: 640px) {
+    .cal-compare__row {
+        grid-template-columns: 1fr auto;
+        row-gap: 4px;
+    }
+    .cal-compare__current { grid-column: 2; }
+    .cal-compare__prev { grid-column: 1 / -1; }
+    .cal-compare__diff { grid-column: 2; }
+}
+
+/* ============ CAL RECORDS ============ */
+.cal-records {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+}
+.cal-record {
+    padding: 16px 18px;
+    background: linear-gradient(135deg, #fffbef, #fff);
+    border: 1px solid rgba(255,176,32,.3);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.cal-record__icon {
+    font-size: 22px;
+    margin-bottom: 4px;
+}
+.cal-record__label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--text-soft);
+    font-weight: 700;
+}
+.cal-record__value {
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -.01em;
+    color: var(--text);
+}
+.cal-record__hint {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ============ CAL AVERAGES ============ */
+.cal-averages {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+}
+.cal-avg {
+    padding: 16px 18px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+}
+.cal-avg__label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--text-soft);
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+.cal-avg__value {
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -.01em;
+    color: var(--text);
+    margin-bottom: 2px;
+}
+.cal-avg__value small {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+.cal-avg__sub {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+/* ============ CAL ALLTIME ============ */
+.cal-alltime {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+}
+.cal-alltime__cell {
+    background: #fff;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    text-align: center;
+}
+.cal-alltime__value {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -.02em;
+    color: var(--text);
+}
+.cal-alltime__label {
+    font-size: 11px;
+    color: var(--text-soft);
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    font-weight: 600;
+}
+
+/* ============ CAL PATTERNS ============ */
+.cal-patterns {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+}
+.cal-pattern {
+    display: flex;
+    gap: 14px;
+    padding: 16px 18px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    align-items: center;
+}
+.cal-pattern__icon {
+    font-size: 28px;
+    flex-shrink: 0;
+}
+.cal-pattern__label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--text-soft);
+    font-weight: 700;
+}
+.cal-pattern__value {
+    font-size: 18px;
+    font-weight: 800;
+    color: var(--text);
+    margin: 2px 0;
+}
+.cal-pattern__hint {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+/* ============ CAL TOP ============ */
+.cal-top {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 16px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm);
+}
+.cal-top__row {
+    display: grid;
+    grid-template-columns: 28px 28px 1fr auto auto;
+    gap: 12px;
+    align-items: center;
+    padding: 10px 6px;
+    border-bottom: 1px dashed var(--border);
+    color: inherit;
+    text-decoration: none;
+    transition: background .15s;
+}
+.cal-top__row:last-child { border-bottom: none; }
+.cal-top__row:hover { background: var(--bg-soft); }
+.cal-top__rank {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #fff;
+    font-size: 12px;
+    font-weight: 800;
+}
+.cal-top__icon { font-size: 18px; text-align: center; }
+.cal-top__title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.cal-top__meta { font-size: 12px; white-space: nowrap; }
+.cal-top__value {
+    font-size: 15px;
+    font-weight: 800;
+    color: var(--accent);
+    white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+    .cal-top__row {
+        grid-template-columns: 24px 24px 1fr auto;
+    }
+    .cal-top__meta { display: none; }
+}
+
+/* ============ CAL BAR FUTURE ============ */
+.cal-bar-wrap.is-future .cal-bar { opacity: .3; }
+.cal-bar-wrap.is-future .cal-bar__label { opacity: .45; }
