@@ -11,7 +11,7 @@ return [
         'port'     => 3306,
         'database' => 'yat-sport',
         'username' => 'yat-sport',
-        'password' => 'gopaSlona_7',
+        'password' => '',
         'charset'  => 'utf8mb4',
     ],
 
@@ -20,7 +20,7 @@ return [
     'host'        => 'smtp.mail.ru',   // чаще всего так
     'port'        => 465,
     'username'    => 'noreply@roadrunnersteam.ru',
-    'password'    => 'syncMaster',
+    'password'    => '',
     'encryption'  => 'ssl',
     'from_email'  => 'noreply@roadrunnersteam.ru',
     'from_name'   => 'Pulse',
