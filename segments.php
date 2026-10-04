@@ -81,7 +81,6 @@ foreach ($segments as $s) {
             ];
         }
     }
-    // Не больше 80 точек на миниатюру
     if (count($points) > 80) {
         $step = (int)ceil(count($points) / 80);
         $simplified = [];
@@ -239,55 +238,63 @@ function segment_type_label(string $type): string
         <div class="segments-grid">
             <?php foreach ($segments as $s): ?>
                 <?php $hasTrack = !empty($tracksById[(int)$s['id']]); ?>
-                <a class="segment-card" href="<?= e(url('segment.php?id=' . (int)$s['id'])) ?>">
-                    <div class="segment-card__thumb-wrap">
-                        <?php if ($hasTrack): ?>
-                            <div class="segment-thumb"
-                                 data-segment-id="<?= (int)$s['id'] ?>"
-                                 data-initialized="0"></div>
-                        <?php else: ?>
-                            <div class="segment-thumb segment-thumb--empty">
-                                <span class="segment-thumb__empty-icon">🗺️</span>
-                                <span class="muted">Нет трека</span>
-                            </div>
-                        <?php endif; ?>
-
-                        <span class="segment-card__type-badge">
-                            <?= e(segment_type_icon((string)$s['type'])) ?>
-                            <?= e(segment_type_label((string)$s['type'])) ?>
-                        </span>
-                    </div>
-
-                    <div class="segment-card__body">
-                        <h3 class="segment-card__title"><?= e($s['name']) ?></h3>
-
-                        <div class="segment-card__stats">
-                            <div class="segment-card__stat">
-                                <span class="segment-card__value"><?= e(format_distance((float)$s['distance_m'])) ?></span>
-                                <span class="segment-card__label">дистанция</span>
-                            </div>
-                            <?php if (!empty($s['elevation_gain_m'])): ?>
-                                <div class="segment-card__stat">
-                                    <span class="segment-card__value"><?= (int)$s['elevation_gain_m'] ?> м</span>
-                                    <span class="segment-card__label">набор</span>
+                <article class="segment-card">
+                    <a class="segment-card__link" href="<?= e(url('segment.php?id=' . (int)$s['id'])) ?>">
+                        <div class="segment-card__thumb-wrap">
+                            <?php if ($hasTrack): ?>
+                                <div class="segment-thumb"
+                                     data-segment-id="<?= (int)$s['id'] ?>"
+                                     data-initialized="0"></div>
+                            <?php else: ?>
+                                <div class="segment-thumb segment-thumb--empty">
+                                    <span class="segment-thumb__empty-icon">🗺️</span>
+                                    <span class="muted">Нет трека</span>
                                 </div>
                             <?php endif; ?>
-                            <div class="segment-card__stat">
-                                <span class="segment-card__value"><?= (int)$s['efforts'] ?></span>
-                                <span class="segment-card__label">попыток</span>
-                            </div>
-                            <div class="segment-card__stat">
-                                <span class="segment-card__value"><?= (int)$s['athletes'] ?></span>
-                                <span class="segment-card__label">спортсменов</span>
-                            </div>
+
+                            <span class="segment-card__type-badge">
+                                <?= e(segment_type_icon((string)$s['type'])) ?>
+                                <?= e(segment_type_label((string)$s['type'])) ?>
+                            </span>
+
+                            <?php if (!(int)$s['is_public']): ?>
+                                <span class="segment-card__private-badge" title="Приватный">🔒</span>
+                            <?php endif; ?>
                         </div>
 
-                        <div class="segment-card__footer">
-                            <span class="muted"><?= e(time_ago((string)$s['created_at'])) ?></span>
-                            <span class="segment-card__cta">Открыть →</span>
+                        <div class="segment-card__body">
+                            <h3 class="segment-card__title"><?= e($s['name']) ?></h3>
+
+                            <div class="segment-card__stats">
+                                <div class="segment-card__stat">
+                                    <span class="segment-card__value"><?= e(format_distance((float)$s['distance_m'])) ?></span>
+                                    <span class="segment-card__label">дистанция</span>
+                                </div>
+                                <?php if (!empty($s['elevation_gain_m'])): ?>
+                                    <div class="segment-card__stat">
+                                        <span class="segment-card__value"><?= (int)$s['elevation_gain_m'] ?> м</span>
+                                        <span class="segment-card__label">набор</span>
+                                    </div>
+                                <?php endif; ?>
+                                <div class="segment-card__stat">
+                                    <span class="segment-card__value"><?= (int)$s['efforts'] ?></span>
+                                    <span class="segment-card__label">попыток</span>
+                                </div>
+                                <div class="segment-card__stat">
+                                    <span class="segment-card__value"><?= (int)$s['athletes'] ?></span>
+                                    <span class="segment-card__label">спортсменов</span>
+                                </div>
+                            </div>
+
+                            <div class="segment-card__footer">
+                                <span class="muted"><?= e(time_ago((string)$s['created_at'])) ?></span>
+                                <span class="segment-card__cta">Открыть →</span>
+                            </div>
                         </div>
-                    </div>
-                </a>
+                    </a>
+
+                   
+                </article>
             <?php endforeach; ?>
         </div>
     <?php endif; ?>

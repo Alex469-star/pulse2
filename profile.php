@@ -40,9 +40,27 @@ if (!$user) {
 
 $isMe = $me && (int)$me['id'] === (int)$user['id'];
 
+// ---- Wahoo connection status ----
+$wahooConnected = false;
+$wahooSyncedCount = 0;
+if ($isMe) {
+    try {
+        $stmt = db()->prepare('SELECT wahoo_access_token FROM users WHERE id = ? LIMIT 1');
+        $stmt->execute([(int)$me['id']]);
+        $wahooConnected = (bool)$stmt->fetchColumn();
+
+        if ($wahooConnected) {
+            $stmt = db()->prepare('SELECT COUNT(*) FROM wahoo_synced_workouts WHERE user_id = ?');
+            $stmt->execute([(int)$me['id']]);
+            $wahooSyncedCount = (int)$stmt->fetchColumn();
+        }
+    } catch (Throwable $e) {
+        $wahooConnected = false;
+    }
+}
+
 // ---- Приватность ----
 $isPublicProfile = (int)$user['is_public'] === 1;
-$isFollowing     = $me ? Follow::isFollowing((int)$me['id'], (int)$user['id']) : false;
 
 $privateProfile = false;
 $activities = [];
@@ -51,6 +69,10 @@ $followers = [];
 $following = [];
 $followersCount = 0;
 $followingCount = 0;
+$totalActivities = 0;
+$totalPages = 1;
+$pageNum = 1;
+$perPage = 20;
 
 if (!$isPublicProfile && !$isMe) {
     $privateProfile = true;
@@ -71,8 +93,21 @@ if (!$isPublicProfile && !$isMe) {
         $followersCount = $followingCount = 0;
     }
 
+    // ---- Пагинация активностей ----
+    $pageNum = max(1, (int)($_GET['page'] ?? 1));
+
     try {
-        $activities = Activity::byUser((int)$user['id'], 20);
+        $totalActivities = Activity::countByUser((int)$user['id']);
+    } catch (Throwable $e) {
+        $totalActivities = 0;
+    }
+
+    $totalPages = max(1, (int)ceil($totalActivities / $perPage));
+    if ($pageNum > $totalPages) $pageNum = $totalPages;
+    $offset = ($pageNum - 1) * $perPage;
+
+    try {
+        $activities = Activity::byUser((int)$user['id'], $perPage, $offset);
     } catch (Throwable $e) { $activities = []; }
 
     try {
@@ -668,6 +703,19 @@ function activity_label(string $type): string
                     <?php if ($isMe): ?>
                         <a href="<?= e(url('profile-edit.php')) ?>" class="btn btn--ghost btn--sm">⚙️ Настройки</a>
                         <a href="<?= e(url('activity-upload.php')) ?>" class="btn btn--primary btn--sm">+ Загрузить</a>
+                        <?php if ($wahooConnected): ?>
+                            <a href="<?= e(url('wahoo-sync.php')) ?>"
+                               class="btn btn--ghost btn--sm"
+                               title="Wahoo подключён — открыть синхронизацию">
+                                🚴 Wahoo ✓
+                            </a>
+                        <?php else: ?>
+                            <a href="<?= e(url('wahoo-connect.php')) ?>"
+                               class="btn btn--ghost btn--sm"
+                               title="Подключить аккаунт Wahoo">
+                                🚴 Подключить Wahoo
+                            </a>
+                        <?php endif; ?>
                     <?php elseif ($me): ?>
                         <form method="post" style="display:inline">
                             <?= csrf_field() ?>
@@ -856,8 +904,10 @@ function activity_label(string $type): string
         <!-- Активности -->
         <h2 class="profile-section-title">
             Активности
-            <?php if (count($activities) >= 20): ?>
-                <span class="muted" style="font-weight:500;font-size:14px">(последние 20)</span>
+            <?php if ($totalActivities > 0): ?>
+                <span class="muted" style="font-weight:500;font-size:14px">
+                    (<?= (int)$totalActivities ?> всего<?= $totalPages > 1 ? ', стр. ' . (int)$pageNum . ' из ' . (int)$totalPages : '' ?>)
+                </span>
             <?php endif; ?>
         </h2>
 
@@ -882,13 +932,26 @@ function activity_label(string $type): string
                             <span class="activity-type">
                                 <?= e(activity_icon((string)$a['type'])) ?> <?= e(activity_label((string)$a['type'])) ?>
                             </span>
-                            <span class="muted"><?= e(time_ago((string)$a['created_at'])) ?></span>
+                            <span class="muted">
+                                <?php
+                                    $activityWhen = $a['started_at'] ?? $a['created_at'] ?? null;
+                                    if ($activityWhen) {
+                                        echo '📅 ' . e(date('d.m.Y H:i', strtotime((string)$activityWhen)));
+                                    }
+                                ?>
+                            </span>
                         </div>
 
                         <a href="<?= e(url('activity.php?id=' . $aid)) ?>"
                            class="profile-activity-card__title-link">
                             <h3 class="profile-activity-card__title"><?= e($a['title']) ?></h3>
                         </a>
+
+                        <?php if (!empty($a['description'])): ?>
+                            <div class="profile-activity-card__description">
+                                <?= nl2br(e((string)$a['description'])) ?>
+                            </div>
+                        <?php endif; ?>
 
                         <?php if ($hasTrack): ?>
                             <a href="<?= e(url('activity.php?id=' . $aid)) ?>"
@@ -965,9 +1028,9 @@ function activity_label(string $type): string
                                 </span>
                             <?php endif; ?>
                             <a class="action" href="<?= e(url('activity.php?id=' . $aid . '#comments')) ?>">
-    <span class="action__icon">💬</span>
-    <span><?= (int)($a['comments_count'] ?? 0) ?></span>
-</a>
+                                <span class="action__icon">💬</span>
+                                <span><?= (int)($a['comments_count'] ?? 0) ?></span>
+                            </a>
                             <a class="action" href="<?= e(url('activity.php?id=' . $aid)) ?>">
                                 <span class="action__icon">🔗</span>
                                 <span>Открыть</span>
@@ -976,6 +1039,82 @@ function activity_label(string $type): string
                     </article>
                 <?php endforeach; ?>
             </div>
+
+            <?php if ($totalPages > 1): ?>
+    <nav class="pagination" aria-label="Навигация по страницам активностей">
+        <?php
+            $baseQs = ['u' => (string)$user['username']];
+
+            // Окно страниц: показываем не больше 7 номеров вокруг текущей
+            $window = 2;
+            $start = max(1, $pageNum - $window);
+            $end   = min($totalPages, $pageNum + $window);
+
+            // Расширяем окно, чтобы всегда было ~5 номеров, если это возможно
+            if ($end - $start < $window * 2) {
+                if ($start === 1) {
+                    $end = min($totalPages, $start + $window * 2);
+                } elseif ($end === $totalPages) {
+                    $start = max(1, $end - $window * 2);
+                }
+            }
+        ?>
+
+        <?php // «В начало» + стрелка влево ?>
+        <?php if ($pageNum > 1): ?>
+            <a class="pagination__link pagination__link--arrow"
+               href="?<?= e(http_build_query($baseQs + ['page' => 1])) ?>"
+               aria-label="Первая страница">«</a>
+            <a class="pagination__link pagination__link--arrow"
+               href="?<?= e(http_build_query($baseQs + ['page' => $pageNum - 1])) ?>"
+               aria-label="Предыдущая страница">‹</a>
+        <?php else: ?>
+            <span class="pagination__link pagination__link--arrow pagination__link--disabled">«</span>
+            <span class="pagination__link pagination__link--arrow pagination__link--disabled">‹</span>
+        <?php endif; ?>
+
+        <?php // Первая страница + многоточие, если окно начинается не с 1 ?>
+        <?php if ($start > 1): ?>
+            <a class="pagination__link"
+               href="?<?= e(http_build_query($baseQs + ['page' => 1])) ?>">1</a>
+            <?php if ($start > 2): ?>
+                <span class="pagination__ellipsis">…</span>
+            <?php endif; ?>
+        <?php endif; ?>
+
+        <?php // Основное окно номеров ?>
+        <?php for ($p = $start; $p <= $end; $p++): ?>
+            <?php if ($p === $pageNum): ?>
+                <span class="pagination__link pagination__link--active" aria-current="page"><?= $p ?></span>
+            <?php else: ?>
+                <a class="pagination__link"
+                   href="?<?= e(http_build_query($baseQs + ['page' => $p])) ?>"><?= $p ?></a>
+            <?php endif; ?>
+        <?php endfor; ?>
+
+        <?php // Последняя страница + многоточие, если окно кончается раньше ?>
+        <?php if ($end < $totalPages): ?>
+            <?php if ($end < $totalPages - 1): ?>
+                <span class="pagination__ellipsis">…</span>
+            <?php endif; ?>
+            <a class="pagination__link"
+               href="?<?= e(http_build_query($baseQs + ['page' => $totalPages])) ?>"><?= $totalPages ?></a>
+        <?php endif; ?>
+
+        <?php // Стрелка вправо + «В конец» ?>
+        <?php if ($pageNum < $totalPages): ?>
+            <a class="pagination__link pagination__link--arrow"
+               href="?<?= e(http_build_query($baseQs + ['page' => $pageNum + 1])) ?>"
+               aria-label="Следующая страница">›</a>
+            <a class="pagination__link pagination__link--arrow"
+               href="?<?= e(http_build_query($baseQs + ['page' => $totalPages])) ?>"
+               aria-label="Последняя страница">»</a>
+        <?php else: ?>
+            <span class="pagination__link pagination__link--arrow pagination__link--disabled">›</span>
+            <span class="pagination__link pagination__link--arrow pagination__link--disabled">»</span>
+        <?php endif; ?>
+    </nav>
+<?php endif; ?>
         <?php endif; ?>
 
     <?php endif; ?>

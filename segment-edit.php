@@ -2,48 +2,64 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/includes/auth.php';
-require_once __DIR__ . '/models/Activity.php';
 require_once __DIR__ . '/models/Segment.php';
 require_once __DIR__ . '/services/GpxParser.php';
+require_once __DIR__ . '/services/SegmentMatcher.php';
 
 auth_start();
 $me = require_login();
 
+$segmentId = (int)($_GET['id'] ?? $_POST['segment_id'] ?? 0);
+if ($segmentId <= 0) {
+    http_response_code(404);
+    exit('Сегмент не найден');
+}
+
+$segment = Segment::findById($segmentId);
+if (!$segment) {
+    http_response_code(404);
+    exit('Сегмент не найден');
+}
+
+// Редактировать может только создатель
+$isCreator = (int)$segment['creator_id'] === (int)$me['id'];
+if (!$isCreator) {
+    http_response_code(403);
+    exit('Редактировать можно только свои сегменты');
+}
+
 $errors = [];
-$overlappingId = null;
 $old = [
-    'name'         => '',
-    'type'         => 'run',
-    'elapsed_time' => '',
-    'is_public'    => 1,
+    'name'      => (string)$segment['name'],
+    'type'      => (string)$segment['type'],
+    'is_public' => (int)$segment['is_public'],
 ];
 
-// ---- Активность, из которой создаём сегмент (опционально) ----
-$activityId = (int)($_GET['activity_id'] ?? $_POST['activity_id'] ?? 0);
-$activity   = null;
-
-if ($activityId > 0) {
-    try {
-        $activity = Activity::findById($activityId);
-        if (!$activity) {
-            $errors['_general'] = 'Активность не найдена';
-        } elseif ((int)$activity['user_id'] !== (int)$me['id']) {
-            $errors['_general'] = 'Можно создавать сегменты только из своих активностей';
-            $activity = null;
+// Исходный трек — для JS
+$segmentTrack = [];
+if (!empty($segment['track_json'])) {
+    $decoded = json_decode((string)$segment['track_json'], true);
+    if (is_array($decoded)) {
+        foreach ($decoded as $p) {
+            if (isset($p['lat'], $p['lng'])) {
+                $segmentTrack[] = [
+                    'lat' => (float)$p['lat'],
+                    'lng' => (float)$p['lng'],
+                    'ele' => isset($p['ele']) ? (float)$p['ele'] : null,
+                    't'   => isset($p['t'])   ? (int)$p['t']     : null,
+                ];
+            }
         }
-    } catch (Throwable $e) {
-        $errors['_general'] = 'Ошибка загрузки активности: ' . $e->getMessage();
     }
 }
 
-// ---- POST: создание сегмента ----
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($errors['_general'])) {
+// ---- POST: сохранение ----
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check($_POST['csrf'] ?? null);
 
-    $old['name']         = trim((string)($_POST['name'] ?? ''));
-    $old['type']         = (string)($_POST['type'] ?? 'run');
-    $old['elapsed_time'] = trim((string)($_POST['elapsed_time'] ?? ''));
-    $old['is_public']    = isset($_POST['is_public']) ? 1 : 0;
+    $old['name']      = trim((string)($_POST['name'] ?? ''));
+    $old['type']      = (string)($_POST['type'] ?? 'run');
+    $old['is_public'] = isset($_POST['is_public']) ? 1 : 0;
 
     if ($old['name'] === '') {
         $errors['name'] = 'Введите название';
@@ -56,6 +72,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($errors['_general'])) {
         $old['type'] = 'run';
     }
 
+    // ---- Трек (может быть изменён через ползунки) ----
     $trackRaw = (string)($_POST['track_json'] ?? '');
     $track = json_decode($trackRaw, true);
 
@@ -77,47 +94,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($errors['_general'])) {
         }
     }
 
-    // ---- Проверка: нет ли уже сегмента на этом участке ----
-    if (empty($errors['track'])) {
-        try {
-            $existing = Segment::findOverlapping($old['type'], $track);
-
-            if ($existing !== null) {
-                $errors['track'] = 'Сегмент на этом участке уже существует: «'
-                    . $existing['name'] . '». '
-                    . 'Откройте его или измените границы нового сегмента.';
-                $overlappingId = (int)$existing['id'];
-            }
-        } catch (Throwable $e) {
-            log_to_file('segment-create.log', 'Overlap check failed: ' . $e->getMessage());
-        }
-    }
-
-    // ---- Время прохождения ----
-    $elapsedSec = null;
-
-    if (!empty($_POST['auto_elapsed_sec']) && ctype_digit((string)$_POST['auto_elapsed_sec'])) {
-        $candidate = (int)$_POST['auto_elapsed_sec'];
-        if ($candidate > 0) {
-            $elapsedSec = $candidate;
-        }
-    }
-
-    if ($elapsedSec === null && $activity && $old['elapsed_time'] !== '') {
-        $parts = array_map('intval', explode(':', $old['elapsed_time']));
-        if (count($parts) === 2) {
-            $elapsedSec = $parts[0] * 60 + $parts[1];
-        } elseif (count($parts) === 3) {
-            $elapsedSec = $parts[0] * 3600 + $parts[1] * 60 + $parts[2];
-        } else {
-            $errors['elapsed_time'] = 'Формат: MM:SS или HH:MM:SS';
-        }
-        if ($elapsedSec !== null && $elapsedSec <= 0) {
-            $errors['elapsed_time'] = 'Время должно быть больше нуля';
-            $elapsedSec = null;
-        }
-    }
-
     if (!$errors) {
         try {
             $distance = 0.0;
@@ -128,37 +104,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($errors['_general'])) {
                 );
             }
 
-            $segmentId = Segment::create((int)$me['id'], [
-                'name'              => $old['name'],
-                'type'              => $old['type'],
-                'distance_m'        => $distance,
-                'elevation_gain_m'  => null,
-                'track_json'        => json_encode($track, JSON_UNESCAPED_UNICODE),
-                'is_public'         => $old['is_public'],
+            // Обновляем сам сегмент
+            db()->prepare(
+                'UPDATE segments
+                 SET name = :name,
+                     type = :type,
+                     distance_m = :distance_m,
+                     track_json = :track_json,
+                     is_public = :is_public
+                 WHERE id = :id AND creator_id = :uid'
+            )->execute([
+                ':name'        => $old['name'],
+                ':type'        => $old['type'],
+                ':distance_m'  => $distance,
+                ':track_json'  => json_encode($track, JSON_UNESCAPED_UNICODE),
+                ':is_public'   => $old['is_public'],
+                ':id'          => $segmentId,
+                ':uid'         => (int)$me['id'],
             ]);
 
-                        if ($activity && $elapsedSec !== null) {
-                Segment::addEffort(
-                    $segmentId,
-                    (int)$activity['id'],
-                    (int)$me['id'],
-                    $elapsedSec,
-                    $activity['started_at']
-                );
-            }
+            // Все усилия по этому сегменту устарели — удаляем авто
+            db()->prepare(
+                'DELETE FROM segment_efforts
+                 WHERE segment_id = ? AND is_auto = 1'
+            )->execute([$segmentId]);
 
-            // ---- Автоматический матчинг ВСЕХ пользователей по новому сегменту ----
-            // Именно этот вызов синхронизирует сегмент между всеми юзерами:
-            // он берёт все публичные сегменты того же типа и находит совпадения
-            // среди активностей всех пользователей.
+            // Пересчитываем усилия всех пользователей по новому треку
             try {
-                require_once __DIR__ . '/services/SegmentMatcher.php';
                 SegmentMatcher::matchAllUsersForSegment($segmentId);
             } catch (Throwable $e) {
-                log_to_file('segment-match.log', 'Auto match after create failed: ' . $e->getMessage());
+                log_to_file('segment-match.log', 'Rematch after edit failed: ' . $e->getMessage());
             }
 
-            flash('Сегмент «' . $old['name'] . '» создан', 'success');
+            flash('Сегмент обновлён', 'success');
             redirect(url('segment.php?id=' . $segmentId));
         } catch (Throwable $e) {
             $errors['_general'] = 'Не удалось сохранить: ' . $e->getMessage();
@@ -166,51 +144,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($errors['_general'])) {
     }
 }
 
-// ---- Данные трека активности для JS ----
-$activityTrack = [];
-if ($activity && !empty($activity['track_json'])) {
-    $decoded = json_decode((string)$activity['track_json'], true);
-    if (is_array($decoded)) {
-        foreach ($decoded as $p) {
-            if (isset($p['lat'], $p['lng'])) {
-                $activityTrack[] = [
-                    'lat' => (float)$p['lat'],
-                    'lng' => (float)$p['lng'],
-                    'ele' => isset($p['ele']) ? (float)$p['ele'] : null,
-                    't'   => isset($p['t'])   ? (int)$p['t']     : null,
-                ];
-            }
-        }
-    }
-}
-
-$pageTitle = $activity ? 'Новый сегмент из активности' : 'Новый сегмент';
+$pageTitle = 'Редактировать сегмент: ' . $segment['name'];
 
 $extraCss = ['https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'];
 $extraJs  = ['https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'];
 
 $inlineJs = '
-window.__ACTIVITY_TRACK__ = ' . json_encode($activityTrack, JSON_UNESCAPED_UNICODE) . ';
+window.__SEGMENT_TRACK__ = ' . json_encode($segmentTrack, JSON_UNESCAPED_UNICODE) . ';
 
 (function () {
     "use strict";
 
     if (typeof L === "undefined") {
         console.error("Leaflet не загрузился");
-        var el = document.getElementById("seg-map");
-        if (el) el.innerHTML = "<div style=\"padding:40px;text-align:center;color:#b3261e\">Не удалось загрузить карту</div>";
         return;
     }
 
-    var track = window.__ACTIVITY_TRACK__ || [];
+    var track = window.__SEGMENT_TRACK__ || [];
     var mapEl = document.getElementById("seg-map");
     if (!mapEl) return;
 
     var map = L.map("seg-map", { scrollWheelZoom: true }).setView([55.751244, 37.618423], 12);
 
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: "&copy; OpenStreetMap"
+        maxZoom: 19, attribution: "&copy; OpenStreetMap"
     }).addTo(map);
 
     var baseLine = null;
@@ -239,27 +196,13 @@ window.__ACTIVITY_TRACK__ = ' . json_encode($activityTrack, JSON_UNESCAPED_UNICO
         return (m / 1000).toFixed(2) + " км";
     }
 
-    function formatDuration(sec) {
-        sec = Math.round(sec);
-        var h = Math.floor(sec / 3600);
-        var m = Math.floor((sec % 3600) / 60);
-        var s = sec % 60;
-        if (h > 0) return h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
-        return m + ":" + String(s).padStart(2, "0");
-    }
-
     if (track.length >= 2) {
         baseLine = L.polyline(track.map(function(p) { return [p.lat, p.lng]; }), {
-            color: "#9aa3b2",
-            weight: 5,
-            opacity: 0.55,
-            interactive: false
+            color: "#9aa3b2", weight: 5, opacity: 0.55, interactive: false
         }).addTo(map);
-
         map.fitBounds(baseLine.getBounds(), { padding: [30, 30] });
     }
 
-    var infoEl       = document.getElementById("track-info");
     var countEl      = document.getElementById("track-count");
     var lengthEl     = document.getElementById("track-length");
     var startLabel   = document.getElementById("start-label");
@@ -270,15 +213,12 @@ window.__ACTIVITY_TRACK__ = ' . json_encode($activityTrack, JSON_UNESCAPED_UNICO
     var endValueEl   = document.getElementById("end-value");
     var elevationEl  = document.getElementById("seg-elevation");
     var hiddenInput  = document.getElementById("track_json");
-    var autoElapsedEl = document.getElementById("auto-elapsed-sec");
     var form         = document.getElementById("seg-form");
 
     function applySegment(startIdx, endIdx) {
         if (!track.length) return;
 
-        if (startIdx > endIdx) {
-            var t = startIdx; startIdx = endIdx; endIdx = t;
-        }
+        if (startIdx > endIdx) { var t = startIdx; startIdx = endIdx; endIdx = t; }
         startIdx = Math.max(0, Math.min(track.length - 1, startIdx));
         endIdx   = Math.max(0, Math.min(track.length - 1, endIdx));
 
@@ -287,9 +227,7 @@ window.__ACTIVITY_TRACK__ = ' . json_encode($activityTrack, JSON_UNESCAPED_UNICO
         if (selectedLine) map.removeLayer(selectedLine);
         if (slice.length >= 2) {
             selectedLine = L.polyline(slice.map(function(p) { return [p.lat, p.lng]; }), {
-                color: "#ff5a1f",
-                weight: 6,
-                opacity: 0.95
+                color: "#ff5a1f", weight: 6, opacity: 0.95
             }).addTo(map);
         }
 
@@ -303,22 +241,19 @@ window.__ACTIVITY_TRACK__ = ' . json_encode($activityTrack, JSON_UNESCAPED_UNICO
             icon: L.divIcon({
                 className: "seg-marker seg-marker--start",
                 html: "<div class=\"seg-marker__dot\"></div>",
-                iconSize: [22, 22],
-                iconAnchor: [11, 11]
+                iconSize: [22, 22], iconAnchor: [11, 11]
             })
-        }).addTo(map).bindPopup("Начало сегмента");
+        }).addTo(map).bindPopup("Начало");
 
         endMarker = L.marker([last.lat, last.lng], {
             icon: L.divIcon({
                 className: "seg-marker seg-marker--end",
                 html: "<div class=\"seg-marker__dot\"></div>",
-                iconSize: [22, 22],
-                iconAnchor: [11, 11]
+                iconSize: [22, 22], iconAnchor: [11, 11]
             })
-        }).addTo(map).bindPopup("Конец сегмента");
+        }).addTo(map).bindPopup("Конец");
 
         var dist = totalLength(slice);
-        if (infoEl)     infoEl.style.display = "flex";
         if (countEl)    countEl.textContent = slice.length;
         if (lengthEl)   lengthEl.textContent = formatMeters(dist);
         if (startLabel) startLabel.textContent = "Точка " + (startIdx + 1);
@@ -330,16 +265,6 @@ window.__ACTIVITY_TRACK__ = ' . json_encode($activityTrack, JSON_UNESCAPED_UNICO
             hiddenInput.value = JSON.stringify(
                 slice.map(function(p) { return { lat: +p.lat.toFixed(6), lng: +p.lng.toFixed(6) }; })
             );
-        }
-
-        if (autoElapsedEl) {
-            var startT = first.t;
-            var endT = last.t;
-            if (startT && endT && endT > startT) {
-                autoElapsedEl.value = String(endT - startT);
-            } else {
-                autoElapsedEl.value = "";
-            }
         }
 
         renderElevation(slice);
@@ -355,8 +280,7 @@ window.__ACTIVITY_TRACK__ = ' . json_encode($activityTrack, JSON_UNESCAPED_UNICO
 
         var minEle = Infinity, maxEle = -Infinity;
         var dist = 0;
-        var xs = [0];
-        var ys = [withEle[0].ele];
+        var xs = [0], ys = [withEle[0].ele];
 
         for (var i = 1; i < withEle.length; i++) {
             dist += haversine(withEle[i-1], withEle[i]);
@@ -384,12 +308,10 @@ window.__ACTIVITY_TRACK__ = ' . json_encode($activityTrack, JSON_UNESCAPED_UNICO
 
         elevationEl.innerHTML =
             "<svg viewBox=\"0 0 " + W + " " + H + "\" preserveAspectRatio=\"none\" width=\"100%\" height=\"" + H + "\">" +
-                "<defs>" +
-                    "<linearGradient id=\"segElevGrad\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">" +
-                        "<stop offset=\"0%\" stop-color=\"#ff5a1f\" stop-opacity=\".35\"/>" +
-                        "<stop offset=\"100%\" stop-color=\"#ff5a1f\" stop-opacity=\".02\"/>" +
-                    "</linearGradient>" +
-                "</defs>" +
+                "<defs><linearGradient id=\"segElevGrad\" x1=\"0\" y1=\"0\" x2=\"0\" y2=\"1\">" +
+                    "<stop offset=\"0%\" stop-color=\"#ff5a1f\" stop-opacity=\".35\"/>" +
+                    "<stop offset=\"100%\" stop-color=\"#ff5a1f\" stop-opacity=\".02\"/>" +
+                "</linearGradient></defs>" +
                 "<polygon points=\"" + area + "\" fill=\"url(#segElevGrad)\"/>" +
                 "<polyline points=\"" + points + "\" fill=\"none\" stroke=\"#ff5a1f\" stroke-width=\"1.5\"/>" +
             "</svg>" +
@@ -421,6 +343,7 @@ window.__ACTIVITY_TRACK__ = ' . json_encode($activityTrack, JSON_UNESCAPED_UNICO
         startRange.addEventListener("input", syncFromRanges);
         endRange.addEventListener("input", syncFromRanges);
 
+        // Инициализация: весь трек выделен
         applySegment(0, track.length - 1);
     }
 
@@ -440,43 +363,6 @@ window.__ACTIVITY_TRACK__ = ' . json_encode($activityTrack, JSON_UNESCAPED_UNICO
             endRange.value = "0";
             applySegment(0, 0);
         });
-    }
-
-    if (!track.length) {
-        var manualPts = [];
-        var manualLine = null;
-
-        function redrawManual() {
-            if (manualLine) map.removeLayer(manualLine);
-            if (manualPts.length >= 2) {
-                manualLine = L.polyline(manualPts.map(function(p) { return [p.lat, p.lng]; }), {
-                    color: "#ff5a1f", weight: 6, opacity: 0.95
-                }).addTo(map);
-            }
-
-            if (hiddenInput) {
-                hiddenInput.value = JSON.stringify(
-                    manualPts.map(function(p) { return { lat: +p.lat.toFixed(6), lng: +p.lng.toFixed(6) }; })
-                );
-            }
-
-            if (infoEl) infoEl.style.display = manualPts.length ? "flex" : "none";
-            if (countEl) countEl.textContent = manualPts.length;
-            if (lengthEl) lengthEl.textContent = formatMeters(totalLength(manualPts));
-        }
-
-        map.on("click", function(e) {
-            manualPts.push({ lat: e.latlng.lat, lng: e.latlng.lng, ele: null, t: null });
-            redrawManual();
-        });
-
-        var resetManual = document.getElementById("track-reset");
-        if (resetManual) {
-            resetManual.addEventListener("click", function() {
-                manualPts = [];
-                redrawManual();
-            });
-        }
     }
 
     if (form) {
@@ -506,16 +392,10 @@ require __DIR__ . '/includes/header.php';
 
 <section class="form-page form-page--wide">
     <div class="form-card">
-        <h1 class="form-card__title">
-            <?= $activity ? 'Сегмент из активности' : 'Создать сегмент' ?>
-        </h1>
+        <h1 class="form-card__title">Редактировать сегмент</h1>
         <p class="form-card__subtitle">
-            <?php if ($activity): ?>
-                Перетаскивайте <strong>два ползунка</strong> под картой, чтобы выбрать начало и конец сегмента.
-                Время прохождения подставится автоматически, если в треке есть временные метки.
-            <?php else: ?>
-                Кликайте по карте, чтобы нарисовать линию сегмента. Минимум 2 точки.
-            <?php endif; ?>
+            Меняйте название, тип, видимость и границы сегмента. После сохранения
+            все усилия будут пересчитаны автоматически.
         </p>
 
         <?php if (!empty($errors['_general'])): ?>
@@ -524,7 +404,7 @@ require __DIR__ . '/includes/header.php';
 
         <div id="seg-map" class="map" style="height: 460px; margin-bottom: 18px"></div>
 
-        <?php if ($activity && $activityTrack): ?>
+        <?php if ($segmentTrack): ?>
             <div class="seg-slider-wrap">
                 <div class="seg-slider__labels">
                     <span id="start-label" class="seg-slider__label">Начало</span>
@@ -553,21 +433,12 @@ require __DIR__ . '/includes/header.php';
                 <button type="button" id="seg-full"  class="seg-track-reset">Весь трек</button>
                 <button type="button" id="seg-reset" class="seg-track-reset">Сбросить</button>
             </div>
-        <?php else: ?>
-            <div id="track-info" class="seg-track-info" style="display:none">
-                <span>📍 Точек: <strong id="track-count">0</strong></span>
-                <span>📏 Длина: <strong id="track-length">0 м</strong></span>
-                <button type="button" id="track-reset" class="seg-track-reset">Сбросить</button>
-            </div>
         <?php endif; ?>
 
         <form method="post" id="seg-form" novalidate>
             <?= csrf_field() ?>
+            <input type="hidden" name="segment_id" value="<?= (int)$segmentId ?>">
             <input type="hidden" name="track_json" id="track_json" value="">
-            <input type="hidden" name="auto_elapsed_sec" id="auto-elapsed-sec" value="">
-            <?php if ($activity): ?>
-                <input type="hidden" name="activity_id" value="<?= (int)$activity['id'] ?>">
-            <?php endif; ?>
 
             <div class="field">
                 <label for="name">Название сегмента</label>
@@ -580,14 +451,6 @@ require __DIR__ . '/includes/header.php';
             <?php if (!empty($errors['track'])): ?>
                 <div class="alert alert--error" style="margin-bottom:16px">
                     <?= e($errors['track']) ?>
-                    <?php if (!empty($overlappingId)): ?>
-                        <div style="margin-top:10px">
-                            <a href="<?= e(url('segment.php?id=' . (int)$overlappingId)) ?>"
-                               class="btn btn--primary btn--sm">
-                                Открыть существующий сегмент →
-                            </a>
-                        </div>
-                    <?php endif; ?>
                 </div>
             <?php endif; ?>
 
@@ -604,19 +467,6 @@ require __DIR__ . '/includes/header.php';
                         <option value="other" <?= $old['type'] === 'other' ? 'selected' : '' ?>>📦 Другое</option>
                     </select>
                 </div>
-
-                <?php if ($activity): ?>
-                    <div class="field">
-                        <label for="elapsed_time">Ваше время (MM:SS или HH:MM:SS)</label>
-                        <input type="text" id="elapsed_time" name="elapsed_time"
-                               value="<?= e($old['elapsed_time']) ?>"
-                               placeholder="05:30" pattern="[0-9:]+">
-                        <?php if (!empty($errors['elapsed_time'])): ?>
-                            <span class="field__error"><?= e($errors['elapsed_time']) ?></span>
-                        <?php endif; ?>
-                        <span class="field__hint">Можно оставить пустым — если в треке есть временные метки, время подставится автоматически.</span>
-                    </div>
-                <?php endif; ?>
             </div>
 
             <div class="field field--checkbox">
@@ -626,10 +476,24 @@ require __DIR__ . '/includes/header.php';
                 </label>
             </div>
 
-            <button type="submit" class="btn btn--primary btn--large" style="width:100%">
-                Создать сегмент
-            </button>
+            <div class="form-actions">
+                <button type="submit" class="btn btn--primary btn--large">Сохранить</button>
+                <a href="<?= e(url('segment.php?id=' . $segmentId)) ?>" class="btn btn--ghost btn--large">Отмена</a>
+            </div>
         </form>
+
+        <div class="danger-zone">
+            <h3 class="danger-zone__title">Опасная зона</h3>
+            <p class="muted">
+                Удаление необратимо. Все усилия и записи в лидерборде будут удалены.
+            </p>
+            <form method="post" action="<?= e(url('segment.php?id=' . $segmentId)) ?>"
+                  onsubmit="return confirm('Удалить сегмент? Это необратимо.')">
+                <?= csrf_field() ?>
+                <input type="hidden" name="action" value="delete">
+                <button class="btn btn--danger">🗑 Удалить сегмент</button>
+            </form>
+        </div>
     </div>
 </section>
 

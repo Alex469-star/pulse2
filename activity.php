@@ -280,6 +280,50 @@ if (!empty($activity['gear_id'])) {
 }
 
 // ============================================================
+// РАНГИ И СТАТИСТИКА ПО СЕГМЕНТАМ
+// ============================================================
+$segmentRanks = [];
+$segmentStats = [];
+$segmentBestTimes = [];
+
+if ($segments && $me) {
+    $segmentIds = array_map(function ($s) { return (int)$s['segment_id']; }, $segments);
+
+    try {
+        $segmentRanks = Segment::userRanksForSegments($segmentIds, (int)$me['id']);
+    } catch (Throwable $e) {
+        $segmentRanks = [];
+    }
+
+    try {
+        $segmentBestTimes = Segment::bestTimesForSegments($segmentIds);
+    } catch (Throwable $e) {
+        $segmentBestTimes = [];
+    }
+
+    try {
+        $ph = implode(',', array_fill(0, count($segmentIds), '?'));
+        $stmt = db()->prepare(
+            "SELECT segment_id,
+                    COUNT(*) AS efforts,
+                    COUNT(DISTINCT user_id) AS athletes
+             FROM segment_efforts
+             WHERE segment_id IN ($ph)
+             GROUP BY segment_id"
+        );
+        $stmt->execute($segmentIds);
+        foreach ($stmt->fetchAll() as $row) {
+            $segmentStats[(int)$row['segment_id']] = [
+                'efforts'  => (int)$row['efforts'],
+                'athletes' => (int)$row['athletes'],
+            ];
+        }
+    } catch (Throwable $e) {
+        $segmentStats = [];
+    }
+}
+
+// ============================================================
 // ТРЕК + ДАННЫЕ ДЛЯ ГРАФИКОВ
 // ============================================================
 $track     = [];
@@ -819,6 +863,13 @@ function format_elapsed(int $seconds): string {
     $s = $seconds % 60;
     return $h > 0 ? sprintf('%d:%02d:%02d', $h, $m, $s) : sprintf('%d:%02d', $m, $s);
 }
+function format_gap_from_leader(?int $gapSec): string {
+    if ($gapSec === null || $gapSec <= 0) return '';
+    if ($gapSec < 60) return '+' . $gapSec . ' сек';
+    $m = intdiv($gapSec, 60);
+    $s = $gapSec % 60;
+    return '+' . $m . ':' . str_pad((string)$s, 2, '0', STR_PAD_LEFT);
+}
 
 $aggHrAvg  = $activity['avg_hr']      ?? $sensorAgg['hr']['avg']  ?? null;
 $aggHrMax  = $activity['max_hr']      ?? $sensorAgg['hr']['max']  ?? null;
@@ -959,7 +1010,7 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
             </div>
         </header>
 
-<?php if (!empty($activity['description'])): ?>
+        <?php if (!empty($activity['description'])): ?>
             <div class="activity-card">
                 <h2 class="activity-card__title">Описание</h2>
                 <div class="activity-card__text"><?= nl2br(e((string)$activity['description'])) ?></div>
@@ -1033,102 +1084,126 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
             </div>
         <?php endif; ?>
 
-<?php if ($activityPhotos): ?>
-    <div class="activity-card">
-        <h2 class="activity-card__title">Фотографии (<?= count($activityPhotos) ?>)</h2>
-        <div class="activity-gallery" id="activity-gallery">
-            <?php foreach ($activityPhotos as $i => $ph): ?>
-                <button type="button"
-                        class="activity-gallery__item"
-                        data-index="<?= $i ?>"
-                        data-photo-url="<?= e($ph['url']) ?>"
-                        aria-label="Открыть фото <?= $i + 1 ?> из <?= count($activityPhotos) ?>">
-                    <img src="<?= e($ph['url']) ?>" alt="" loading="lazy">
-                </button>
-            <?php endforeach; ?>
-        </div>
-    </div>
-<?php endif; ?>
+        <?php if ($activityPhotos): ?>
+            <div class="activity-card">
+                <h2 class="activity-card__title">Фотографии (<?= count($activityPhotos) ?>)</h2>
+                <div class="activity-gallery" id="activity-gallery">
+                    <?php foreach ($activityPhotos as $i => $ph): ?>
+                        <button type="button"
+                                class="activity-gallery__item"
+                                data-index="<?= $i ?>"
+                                data-photo-url="<?= e($ph['url']) ?>"
+                                aria-label="Открыть фото <?= $i + 1 ?> из <?= count($activityPhotos) ?>">
+                            <img src="<?= e($ph['url']) ?>" alt="" loading="lazy">
+                        </button>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        <?php endif; ?>
 
-<?php if ($track): ?>
-    <div class="activity-card">
-        <div id="activity-map" class="map"></div>
-    </div>
-<?php else: ?>
-    <div class="activity-card activity-card--empty">
-        <span class="muted">Эта активность без GPS-трека</span>
-    </div>
-<?php endif; ?>
+        <?php if ($track): ?>
+            <div class="activity-card">
+                <div id="activity-map" class="map"></div>
+            </div>
+        <?php else: ?>
+            <div class="activity-card activity-card--empty">
+                <span class="muted">Эта активность без GPS-трека</span>
+            </div>
+        <?php endif; ?>
 
-<?php if ($elevData || $speedData || $hrData || $pwrData || $cadData): ?>
-    <div class="activity-charts">
-        <?php if ($elevData): ?>
-            <div class="chart-card">
-                <div class="chart-card__head">
-                    <h2 class="chart-card__title">⛰️ Профиль высот</h2>
-                    <div class="chart-card__stats" id="elev-stats"></div>
-                </div>
-                <div class="chart-card__body"><canvas id="elev-chart"></canvas></div>
+        <?php if ($elevData || $speedData || $hrData || $pwrData || $cadData): ?>
+            <div class="activity-charts">
+                <?php if ($elevData): ?>
+                    <div class="chart-card">
+                        <div class="chart-card__head">
+                            <h2 class="chart-card__title">⛰️ Профиль высот</h2>
+                            <div class="chart-card__stats" id="elev-stats"></div>
+                        </div>
+                        <div class="chart-card__body"><canvas id="elev-chart"></canvas></div>
+                    </div>
+                <?php endif; ?>
+                <?php if ($speedData): ?>
+                    <div class="chart-card">
+                        <div class="chart-card__head">
+                            <h2 class="chart-card__title">⚡ Скорость</h2>
+                            <div class="chart-card__stats" id="speed-stats"></div>
+                        </div>
+                        <div class="chart-card__body"><canvas id="speed-chart"></canvas></div>
+                    </div>
+                <?php endif; ?>
+                <?php if ($hrData): ?>
+                    <div class="chart-card">
+                        <div class="chart-card__head">
+                            <h2 class="chart-card__title">❤️ Пульс</h2>
+                            <div class="chart-card__stats" id="hr-stats"></div>
+                        </div>
+                        <div class="chart-card__body"><canvas id="hr-chart"></canvas></div>
+                    </div>
+                <?php endif; ?>
+                <?php if ($pwrData): ?>
+                    <div class="chart-card">
+                        <div class="chart-card__head">
+                            <h2 class="chart-card__title">⚡ Мощность</h2>
+                            <div class="chart-card__stats" id="pwr-stats"></div>
+                        </div>
+                        <div class="chart-card__body"><canvas id="pwr-chart"></canvas></div>
+                    </div>
+                <?php endif; ?>
+                <?php if ($cadData): ?>
+                    <div class="chart-card">
+                        <div class="chart-card__head">
+                            <h2 class="chart-card__title">🔄 Каденс</h2>
+                            <div class="chart-card__stats" id="cad-stats"></div>
+                        </div>
+                        <div class="chart-card__body"><canvas id="cad-chart"></canvas></div>
+                    </div>
+                <?php endif; ?>
             </div>
         <?php endif; ?>
-        <?php if ($speedData): ?>
-            <div class="chart-card">
-                <div class="chart-card__head">
-                    <h2 class="chart-card__title">⚡ Скорость</h2>
-                    <div class="chart-card__stats" id="speed-stats"></div>
-                </div>
-                <div class="chart-card__body"><canvas id="speed-chart"></canvas></div>
-            </div>
-        <?php endif; ?>
-        <?php if ($hrData): ?>
-            <div class="chart-card">
-                <div class="chart-card__head">
-                    <h2 class="chart-card__title">❤️ Пульс</h2>
-                    <div class="chart-card__stats" id="hr-stats"></div>
-                </div>
-                <div class="chart-card__body"><canvas id="hr-chart"></canvas></div>
-            </div>
-        <?php endif; ?>
-        <?php if ($pwrData): ?>
-            <div class="chart-card">
-                <div class="chart-card__head">
-                    <h2 class="chart-card__title">⚡ Мощность</h2>
-                    <div class="chart-card__stats" id="pwr-stats"></div>
-                </div>
-                <div class="chart-card__body"><canvas id="pwr-chart"></canvas></div>
-            </div>
-        <?php endif; ?>
-        <?php if ($cadData): ?>
-            <div class="chart-card">
-                <div class="chart-card__head">
-                    <h2 class="chart-card__title">🔄 Каденс</h2>
-                    <div class="chart-card__stats" id="cad-stats"></div>
-                </div>
-                <div class="chart-card__body"><canvas id="cad-chart"></canvas></div>
-            </div>
-        <?php endif; ?>
-    </div>
-<?php endif; ?>
 
-<?php if ($activityPhotos): ?>
-    <div class="lightbox" id="lightbox" hidden>
-        <button type="button" class="lightbox__close" id="lightbox-close" aria-label="Закрыть">×</button>
-        <button type="button" class="lightbox__prev" id="lightbox-prev" aria-label="Предыдущее">‹</button>
-        <button type="button" class="lightbox__next" id="lightbox-next" aria-label="Следующее">›</button>
-        <div class="lightbox__counter" id="lightbox-counter"></div>
-        <div class="lightbox__img-wrap"><img src="" alt="" id="lightbox-img"></div>
-    </div>
-<?php endif; ?>
+        <?php if ($activityPhotos): ?>
+            <div class="lightbox" id="lightbox" hidden>
+                <button type="button" class="lightbox__close" id="lightbox-close" aria-label="Закрыть">×</button>
+                <button type="button" class="lightbox__prev" id="lightbox-prev" aria-label="Предыдущее">‹</button>
+                <button type="button" class="lightbox__next" id="lightbox-next" aria-label="Следующее">›</button>
+                <div class="lightbox__counter" id="lightbox-counter"></div>
+                <div class="lightbox__img-wrap"><img src="" alt="" id="lightbox-img"></div>
+            </div>
+        <?php endif; ?>
 
         <?php if ($segments): ?>
             <div class="activity-card">
                 <h2 class="activity-card__title">Сегменты на этой активности</h2>
                 <div class="segment-rows">
                     <?php foreach ($segments as $s): ?>
-                        <a class="segment-row" href="<?= e(url('segment.php?id=' . (int)$s['segment_id'])) ?>">
+                        <?php
+                            $segId     = (int)$s['segment_id'];
+                            $myRank    = $segmentRanks[$segId] ?? null;
+                            $segStat   = $segmentStats[$segId] ?? ['efforts' => 0, 'athletes' => 0];
+                            $bestTime  = $segmentBestTimes[$segId] ?? null;
+                            $myTime    = (int)$s['elapsed_time_sec'];
+                            $isLeader  = ($myRank === 1);
+
+                            $gapSec = null;
+                            if (!$isLeader && $bestTime !== null && $myTime > $bestTime) {
+                                $gapSec = $myTime - $bestTime;
+                            }
+                            $gapText = format_gap_from_leader($gapSec);
+
+                            $segmentDistanceM = (float)$s['distance_m'];
+                            $avgSpeedMps = ($segmentDistanceM > 0 && $myTime > 0)
+                                ? $segmentDistanceM / $myTime
+                                : null;
+                            $avgSpeedKmh = $avgSpeedMps !== null ? $avgSpeedMps * 3.6 : null;
+                        ?>
+                        <a class="segment-row <?= $isLeader ? 'segment-row--leader' : '' ?>"
+                           href="<?= e(url('segment.php?id=' . $segId)) ?>">
                             <div class="segment-row__body">
                                 <div class="segment-row__name">
                                     <strong><?= e($s['name']) ?></strong>
+                                    <?php if ($isLeader): ?>
+                                        <span class="segment-row__crown" title="Вы лидер этого сегмента">👑</span>
+                                    <?php endif; ?>
                                     <?php if (!empty($s['is_auto'])): ?>
                                         <span class="segment-row__badge">авто</span>
                                     <?php endif; ?>
@@ -1138,9 +1213,25 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
                                     <?php if (!empty($s['match_quality'])): ?>
                                         · совпадение <?= (int)$s['match_quality'] ?>%
                                     <?php endif; ?>
+                                    <?php if ($myRank !== null): ?>
+                                        · <?= $isLeader ? '🥇 1-е место' : ($myRank === 2 ? '🥈 2-е место' : ($myRank === 3 ? '🥉 3-е место' : 'позиция #' . $myRank)) ?>
+                                        из <?= (int)$segStat['athletes'] ?>
+                                    <?php endif; ?>
                                 </div>
+
+                                <?php if ($gapText !== ''): ?>
+                                    <div class="segment-row__gap" title="Отставание от первого места">
+                                        <?= e($gapText) ?> до 1-го места
+                                    </div>
+                                <?php endif; ?>
                             </div>
-                            <div class="segment-row__time"><?= e(format_elapsed((int)$s['elapsed_time_sec'])) ?></div>
+
+                            <div class="segment-row__metrics">
+                                <div class="segment-row__time"><?= e(format_elapsed($myTime)) ?></div>
+                                <?php if ($avgSpeedKmh !== null): ?>
+                                    <div class="segment-row__speed"><?= number_format($avgSpeedKmh, 1, '.', '') ?> км/ч</div>
+                                <?php endif; ?>
+                            </div>
                         </a>
                     <?php endforeach; ?>
                 </div>
@@ -1283,9 +1374,6 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
         lbImg.src = '';
     }
 
-    /* ---- Открытие по клику на фото в галерее ----
-       Делегирование на document — срабатывает и для элементов,
-       добавленных позже, и не зависит от порядка инициализации. */
     document.addEventListener('click', function (e) {
         var item = e.target.closest('.activity-gallery__item');
         if (!item) return;
@@ -1295,14 +1383,12 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
         open(idx);
     });
 
-    /* ---- Закрытие по кнопке × ---- */
     btnClose.addEventListener('click', function (e) {
         e.preventDefault();
         e.stopPropagation();
         close();
     });
 
-    /* ---- Стрелки ---- */
     btnPrev.addEventListener('click', function (e) {
         e.preventDefault();
         e.stopPropagation();
@@ -1315,16 +1401,12 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
         show(current + 1);
     });
 
-    /* ---- Клик по фону лайтбокса — закрыть.
-       Закрываем ТОЛЬКО если клик пришёлся именно на .lightbox,
-       но не на img и не на кнопки/счётчик. ---- */
     lb.addEventListener('click', function (e) {
         if (e.target === lb) {
             close();
         }
     });
 
-    /* ---- Клавиатура ---- */
     document.addEventListener('keydown', function (e) {
         if (!isOpen) return;
         if (e.key === 'Escape') close();
@@ -1332,7 +1414,6 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
         else if (e.key === 'ArrowRight') show(current + 1);
     });
 
-    /* ---- Свайпы ---- */
     var touchStartX = 0;
     lb.addEventListener('touchstart', function (e) {
         touchStartX = e.touches[0].clientX;

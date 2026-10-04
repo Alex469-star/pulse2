@@ -1,10 +1,6 @@
 <?php
 declare(strict_types=1);
 
-ini_set('display_errors', '1');
-ini_set('display_startup_errors', '1');
-error_reporting(E_ALL);
-
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/models/Post.php';
 require_once __DIR__ . '/models/Follow.php';
@@ -90,6 +86,7 @@ if ($me) {
 }
 
 $pageTitle = $post['title'];
+$photoUrls = array_map(function ($p) { return (string)$p['url']; }, $photos);
 require __DIR__ . '/includes/header.php';
 ?>
 
@@ -123,39 +120,40 @@ require __DIR__ . '/includes/header.php';
     </header>
 
     <?php if ($photos): ?>
-    <div class="post-carousel" data-count="<?= count($photos) ?>">
-        <div class="post-carousel__viewport">
-            <div class="post-carousel__track" id="post-carousel-track">
-                <?php foreach ($photos as $i => $ph): ?>
-                    <button type="button"
-                            class="post-carousel__slide"
-                            data-lightbox="post"
-                            data-index="<?= $i ?>"
-                            data-src="<?= e($ph['url']) ?>"
-                            aria-label="Открыть фото <?= $i + 1 ?> из <?= count($photos) ?>">
-                        <img src="<?= e($ph['url']) ?>" alt="" loading="lazy">
-                    </button>
-                <?php endforeach; ?>
+        <div class="post-carousel" data-count="<?= count($photos) ?>">
+            <div class="post-carousel__viewport">
+                <div class="post-carousel__track" id="post-carousel-track">
+                    <?php foreach ($photos as $i => $ph): ?>
+                        <button type="button"
+                                class="post-carousel__slide"
+                                data-lightbox="post"
+                                data-index="<?= $i ?>"
+                                data-src="<?= e($ph['url']) ?>"
+                                aria-label="Открыть фото <?= $i + 1 ?> из <?= count($photos) ?>">
+                            <img src="<?= e($ph['url']) ?>" alt="" loading="lazy">
+                        </button>
+                    <?php endforeach; ?>
+                </div>
+
+                <?php if (count($photos) > 1): ?>
+                    <button type="button" class="post-carousel__nav post-carousel__nav--prev" aria-label="Предыдущее фото">‹</button>
+                    <button type="button" class="post-carousel__nav post-carousel__nav--next" aria-label="Следующее фото">›</button>
+                    <div class="post-carousel__counter"><span id="post-carousel-counter">1</span> / <?= count($photos) ?></div>
+                <?php endif; ?>
             </div>
 
             <?php if (count($photos) > 1): ?>
-                <button type="button" class="post-carousel__nav post-carousel__nav--prev" aria-label="Предыдущее фото">‹</button>
-                <button type="button" class="post-carousel__nav post-carousel__nav--next" aria-label="Следующее фото">›</button>
+                <div class="post-carousel__dots" role="tablist">
+                    <?php foreach ($photos as $i => $ph): ?>
+                        <button type="button"
+                                class="post-carousel__dot <?= $i === 0 ? 'is-active' : '' ?>"
+                                data-index="<?= $i ?>"
+                                aria-label="Перейти к фото <?= $i + 1 ?>"></button>
+                    <?php endforeach; ?>
+                </div>
             <?php endif; ?>
         </div>
-
-        <?php if (count($photos) > 1): ?>
-            <div class="post-carousel__dots" role="tablist">
-                <?php foreach ($photos as $i => $ph): ?>
-                    <button type="button"
-                            class="post-carousel__dot <?= $i === 0 ? 'is-active' : '' ?>"
-                            data-index="<?= $i ?>"
-                            aria-label="Перейти к фото <?= $i + 1 ?>"></button>
-                <?php endforeach; ?>
-            </div>
-        <?php endif; ?>
-    </div>
-<?php endif; ?>
+    <?php endif; ?>
 
     <div class="post-page__body">
         <?= nl2br(e((string)$post['body'])) ?>
@@ -236,7 +234,22 @@ require __DIR__ . '/includes/header.php';
     <?php endif; ?>
 </section>
 
+<?php if ($photos): ?>
+    <div class="lightbox" id="post-lightbox" hidden>
+        <button type="button" class="lightbox__close" data-close aria-label="Закрыть">×</button>
+        <button type="button" class="lightbox__prev"  data-prev aria-label="Предыдущее">‹</button>
+        <button type="button" class="lightbox__next"  data-next aria-label="Следующее">›</button>
+        <div class="lightbox__counter" id="post-lb-counter"></div>
+        <div class="lightbox__img-wrap">
+            <img src="" alt="" id="post-lb-img">
+        </div>
+    </div>
+<?php endif; ?>
+
 <script>
+/* ============================================================
+   AJAX-ЛАЙК
+   ============================================================ */
 (function () {
     var btn = document.querySelector('.js-post-like');
     if (!btn) return;
@@ -279,6 +292,164 @@ require __DIR__ . '/includes/header.php';
             countEl.textContent = oldCount;
         })
         .finally(function () { btn.dataset.loading = '0'; });
+    });
+})();
+
+/* ============================================================
+   КАРУСЕЛЬ ФОТО
+   ============================================================ */
+(function () {
+    "use strict";
+
+    var carousel = document.querySelector(".post-carousel");
+    if (!carousel) return;
+
+    var track    = carousel.querySelector(".post-carousel__track");
+    var slides   = carousel.querySelectorAll(".post-carousel__slide");
+    var prevBtn  = carousel.querySelector(".post-carousel__nav--prev");
+    var nextBtn  = carousel.querySelector(".post-carousel__nav--next");
+    var dots     = carousel.querySelectorAll(".post-carousel__dot");
+    var counter  = document.getElementById("post-carousel-counter");
+
+    if (!track || !slides.length) return;
+
+    function slideWidth() { return track.clientWidth || 1; }
+    function currentIndex() {
+        return Math.round(track.scrollLeft / slideWidth());
+    }
+
+    function goTo(i) {
+        i = Math.max(0, Math.min(slides.length - 1, i));
+        track.scrollTo({ left: i * slideWidth(), behavior: "smooth" });
+    }
+
+    function syncUI() {
+        var idx = currentIndex();
+        dots.forEach(function (d, i) { d.classList.toggle("is-active", i === idx); });
+        if (counter) counter.textContent = (idx + 1);
+        if (prevBtn) prevBtn.disabled = idx === 0;
+        if (nextBtn) nextBtn.disabled = idx === slides.length - 1;
+    }
+
+    if (prevBtn) prevBtn.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); goTo(currentIndex() - 1); });
+    if (nextBtn) nextBtn.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); goTo(currentIndex() + 1); });
+    dots.forEach(function (d, i) {
+        d.addEventListener("click", function (e) { e.preventDefault(); e.stopPropagation(); goTo(i); });
+    });
+
+    var scrollTimer = null;
+    track.addEventListener("scroll", function () {
+        clearTimeout(scrollTimer);
+        scrollTimer = setTimeout(syncUI, 80);
+    }, { passive: true });
+
+    window.addEventListener("resize", function () { goTo(currentIndex()); });
+    syncUI();
+})();
+
+/* ============================================================
+   ЛАЙТБОКС
+   ============================================================ */
+(function () {
+    "use strict";
+
+    var photos = <?= json_encode($photoUrls, JSON_UNESCAPED_UNICODE) ?>;
+    if (!photos.length) return;
+
+    var lb        = document.getElementById("post-lightbox");
+    if (!lb) return;
+
+    var lbImg     = document.getElementById("post-lb-img");
+    var lbCounter = document.getElementById("post-lb-counter");
+    var btnClose  = lb.querySelector("[data-close]");
+    var btnPrev   = lb.querySelector("[data-prev]");
+    var btnNext   = lb.querySelector("[data-next]");
+
+    var current = 0;
+    var isOpen  = false;
+
+    function show(index) {
+        if (index < 0) index = photos.length - 1;
+        if (index >= photos.length) index = 0;
+        current = index;
+        lbImg.src = photos[index];
+        lbCounter.textContent = (index + 1) + " / " + photos.length;
+    }
+
+    function open(index) {
+        if (isOpen) return;
+        isOpen = true;
+        show(index);
+        lb.hidden = false;
+        document.body.style.overflow = "hidden";
+    }
+
+    function close() {
+        if (!isOpen) return;
+        isOpen = false;
+        lb.hidden = true;
+        document.body.style.overflow = "";
+        lbImg.src = "";
+    }
+
+    /* ---- Открытие: клик по слайду карусели ---- */
+    document.addEventListener("click", function (e) {
+        var slide = e.target.closest(".post-carousel__slide");
+        if (!slide) return;
+        if (isOpen) return;                    // защита от повторного открытия
+        e.preventDefault();
+        e.stopPropagation();
+        var idx = parseInt(slide.dataset.index, 10) || 0;
+        open(idx);
+    }, true);   // ← capture: true — перехватываем ДО того, как событие дойдёт до остальных обработчиков
+
+    /* ---- Закрытие: клик по × ---- */
+    btnClose.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+    });
+
+    /* ---- Навигация ---- */
+    btnPrev.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        show(current - 1);
+    });
+
+    btnNext.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        show(current + 1);
+    });
+
+    /* ---- Клик по фону лайтбокса (не по картинке, не по кнопкам) ---- */
+    lb.addEventListener("click", function (e) {
+        // Закрываем только если клик пришёлся на сам .lightbox
+        // или на .lightbox__img-wrap (обёртку), но не на img и не на кнопки.
+        if (e.target === lb || e.target.classList.contains("lightbox__img-wrap")) {
+            close();
+        }
+    });
+
+    /* ---- Клавиатура ---- */
+    document.addEventListener("keydown", function (e) {
+        if (!isOpen) return;
+        if (e.key === "Escape")      { e.preventDefault(); close(); }
+        if (e.key === "ArrowLeft")   { e.preventDefault(); show(current - 1); }
+        if (e.key === "ArrowRight")  { e.preventDefault(); show(current + 1); }
+    });
+
+    /* ---- Свайпы ---- */
+    var touchStartX = 0;
+    lb.addEventListener("touchstart", function (e) {
+        touchStartX = e.touches[0].clientX;
+    }, { passive: true });
+    lb.addEventListener("touchend", function (e) {
+        var diff = e.changedTouches[0].clientX - touchStartX;
+        if (Math.abs(diff) < 50) return;
+        if (diff > 0) show(current - 1);
+        else          show(current + 1);
     });
 })();
 </script>

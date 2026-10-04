@@ -27,14 +27,19 @@ window.__UPLOAD_FEED_URL__      = ' . json_encode(url('feed.php')) . ';
 require __DIR__ . '/includes/header.php';
 ?>
 
+
+
 <section class="form-page">
     <div class="form-card">
         <h1 class="form-card__title">Загрузить активности</h1>
-        <p class="form-card__subtitle">
-            Можно выбрать сразу несколько файлов. Поддерживаются
-            <strong>GPX</strong>, <strong>TCX</strong> и <strong>FIT</strong>
-            (до 10 файлов, каждый не более 25 МБ).
-        </p>
+        
+
+<p class="form-card__subtitle">
+    Можно выбрать сразу несколько файлов. Поддерживаются
+    <strong>GPX</strong>, <strong>TCX</strong> и <strong>FIT</strong>
+    (до 10 файлов, каждый не более 25 МБ).
+    Или <a href="<?= e(url('activity-create.php')) ?>">добавьте тренировку вручную</a>.
+</p>
 
         <div id="upload-results" hidden></div>
 

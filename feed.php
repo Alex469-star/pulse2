@@ -5,149 +5,174 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/models/Activity.php';
 require_once __DIR__ . '/models/Post.php';
 require_once __DIR__ . '/models/User.php';
+require_once __DIR__ . '/models/Segment.php';
 
 // ============================================================
 // ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 // ============================================================
 
-function feed_simplify_track(?string $trackJson, int $maxPoints = 200): array
-{
-    if (empty($trackJson)) return [];
-    $raw = json_decode($trackJson, true);
-    if (!is_array($raw) || count($raw) < 2) return [];
+if (!function_exists('feed_simplify_track')) {
+    function feed_simplify_track(?string $trackJson, int $maxPoints = 200): array
+    {
+        if (empty($trackJson)) return [];
+        $raw = json_decode($trackJson, true);
+        if (!is_array($raw) || count($raw) < 2) return [];
 
-    $points = [];
-    foreach ($raw as $p) {
-        if (isset($p['lat'], $p['lng'])) {
-            $points[] = ['lat' => round((float)$p['lat'], 5), 'lng' => round((float)$p['lng'], 5)];
+        $points = [];
+        foreach ($raw as $p) {
+            if (isset($p['lat'], $p['lng'])) {
+                $points[] = ['lat' => round((float)$p['lat'], 5), 'lng' => round((float)$p['lng'], 5)];
+            }
         }
+        if (count($points) > $maxPoints) {
+            $step = (int)ceil(count($points) / $maxPoints);
+            $out = [];
+            for ($i = 0; $i < count($points); $i += $step) $out[] = $points[$i];
+            if (end($out) !== end($points)) $out[] = end($points);
+            return $out;
+        }
+        return $points;
     }
-    if (count($points) > $maxPoints) {
-        $step = (int)ceil(count($points) / $maxPoints);
-        $out = [];
-        for ($i = 0; $i < count($points); $i += $step) $out[] = $points[$i];
-        if (end($out) !== end($points)) $out[] = end($points);
-        return $out;
-    }
-    return $points;
 }
 
-function feed_fetch_unified(int $viewerId, string $tab, string $type, int $limit, int $offset): array
-{
-    $union = [];
-    $bindSets = ['act' => [], 'post' => []];
+if (!function_exists('feed_fetch_unified')) {
+    function feed_fetch_unified(int $viewerId, string $tab, string $type, int $limit, int $offset): array
+    {
+        $union = [];
+        $bindSets = ['act' => [], 'post' => []];
 
-    if ($tab === 'mine') {
-        $whereActivity = ' AND a.user_id = :me_a';
-        $wherePost     = ' AND p.user_id = :me_p';
-        $bindSets['act']['me_a']  = $viewerId;
-        $bindSets['post']['me_p'] = $viewerId;
-    } elseif ($tab === 'following') {
-        $whereActivity = ' AND a.visibility IN ("public","followers")
-                           AND a.user_id IN (SELECT following_id FROM follows WHERE follower_id = :fo_a)';
-        $wherePost     = ' AND p.visibility IN ("public","followers")
-                           AND p.user_id IN (SELECT following_id FROM follows WHERE follower_id = :fo_p)';
-        $bindSets['act']['fo_a']  = $viewerId;
-        $bindSets['post']['fo_p'] = $viewerId;
-    } else {
-        $whereActivity = ' AND (a.visibility = "public"
-                                OR a.user_id = :me_a
-                                OR (a.visibility = "followers" AND a.user_id IN (
-                                     SELECT following_id FROM follows WHERE follower_id = :fo_a
-                                )))';
-        $wherePost     = ' AND (p.visibility = "public"
-                                OR p.user_id = :me_p
-                                OR (p.visibility = "followers" AND p.user_id IN (
-                                     SELECT following_id FROM follows WHERE follower_id = :fo_p
-                                )))';
-        $bindSets['act']['me_a']  = $viewerId;
-        $bindSets['act']['fo_a']  = $viewerId;
-        $bindSets['post']['me_p'] = $viewerId;
-        $bindSets['post']['fo_p'] = $viewerId;
+        if ($tab === 'mine') {
+            $whereActivity = ' AND a.user_id = :me_a';
+            $wherePost     = ' AND p.user_id = :me_p';
+            $bindSets['act']['me_a']  = $viewerId;
+            $bindSets['post']['me_p'] = $viewerId;
+        } elseif ($tab === 'following') {
+            $whereActivity = ' AND a.visibility IN ("public","followers")
+                               AND a.user_id IN (SELECT following_id FROM follows WHERE follower_id = :fo_a)';
+            $wherePost     = ' AND p.visibility IN ("public","followers")
+                               AND p.user_id IN (SELECT following_id FROM follows WHERE follower_id = :fo_p)';
+            $bindSets['act']['fo_a']  = $viewerId;
+            $bindSets['post']['fo_p'] = $viewerId;
+        } else {
+            $whereActivity = ' AND (a.visibility = "public"
+                                    OR a.user_id = :me_a
+                                    OR (a.visibility = "followers" AND a.user_id IN (
+                                         SELECT following_id FROM follows WHERE follower_id = :fo_a
+                                    )))';
+            $wherePost     = ' AND (p.visibility = "public"
+                                    OR p.user_id = :me_p
+                                    OR (p.visibility = "followers" AND p.user_id IN (
+                                         SELECT following_id FROM follows WHERE follower_id = :fo_p
+                                    )))';
+            $bindSets['act']['me_a']  = $viewerId;
+            $bindSets['act']['fo_a']  = $viewerId;
+            $bindSets['post']['me_p'] = $viewerId;
+            $bindSets['post']['fo_p'] = $viewerId;
+        }
+
+        $aType = ($type !== '') ? $type : '';
+
+        $sqlA = 'SELECT
+                    "activity" AS kind,
+                    a.id AS id,
+                    a.user_id AS user_id,
+                    a.started_at AS started_at,
+                    a.created_at AS created_at,
+                    COALESCE(a.started_at, a.created_at) AS sort_at,
+                    a.type AS type,
+                    a.title AS title,
+                    a.description AS description,
+                    a.distance_m AS distance_m,
+                    a.duration_sec AS duration_sec,
+                    a.avg_speed_mps AS avg_speed_mps,
+                    a.elevation_gain_m AS elevation_gain_m,
+                    a.track_json AS track_json,
+                    a.visibility AS visibility,
+                    u.username, u.display_name, u.avatar_url,
+                    (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id) AS likes_count,
+                    (SELECT COUNT(*) FROM activity_comments c WHERE c.activity_id = a.id) AS comments_count,
+                    (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id AND l.user_id = :vid) AS liked_by_me
+                 FROM activities a
+                 JOIN users u ON u.id = a.user_id
+                 WHERE 1=1' . $whereActivity;
+        if ($aType !== '') $sqlA .= ' AND a.type = :atype';
+        $union[] = $sqlA;
+
+        $sqlP = 'SELECT
+                    "post" AS kind,
+                    p.id AS id,
+                    p.user_id AS user_id,
+                    NULL AS started_at,
+                    p.created_at AS created_at,
+                    p.created_at AS sort_at,
+                    NULL AS type,
+                    p.title AS title,
+                    p.body AS description,
+                    NULL AS distance_m,
+                    NULL AS duration_sec,
+                    NULL AS avg_speed_mps,
+                    NULL AS elevation_gain_m,
+                    NULL AS track_json,
+                    p.visibility AS visibility,
+                    u.username, u.display_name, u.avatar_url,
+                    (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id) AS likes_count,
+                    (SELECT COUNT(*) FROM post_comments c WHERE c.post_id = p.id) AS comments_count,
+                    (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id AND l.user_id = :vid2) AS liked_by_me
+                 FROM posts p
+                 JOIN users u ON u.id = p.user_id
+                 WHERE 1=1' . $wherePost;
+        $union[] = $sqlP;
+
+        $sql = '(' . implode(') UNION ALL (', $union) . ') ORDER BY sort_at DESC, id DESC LIMIT :lim OFFSET :off';
+        $stmt = db()->prepare($sql);
+
+        $stmt->bindValue(':vid', $viewerId, PDO::PARAM_INT);
+        $stmt->bindValue(':vid2', $viewerId, PDO::PARAM_INT);
+
+        foreach ($bindSets['act'] as $name => $val) {
+            $stmt->bindValue(':' . $name, $val, PDO::PARAM_INT);
+        }
+        foreach ($bindSets['post'] as $name => $val) {
+            $stmt->bindValue(':' . $name, $val, PDO::PARAM_INT);
+        }
+        if ($aType !== '') $stmt->bindValue(':atype', $aType);
+
+        $stmt->bindValue(':lim', $limit, PDO::PARAM_INT);
+        $stmt->bindValue(':off', $offset, PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll();
     }
-
-    $aType = ($type !== '') ? $type : '';
-    $sqlA = 'SELECT
-                "activity" AS kind,
-                a.id AS id,
-                a.user_id AS user_id,
-                a.created_at AS sort_at,
-                a.type AS type,
-                a.title AS title,
-                a.description AS description,
-                a.distance_m AS distance_m,
-                a.duration_sec AS duration_sec,
-                a.avg_speed_mps AS avg_speed_mps,
-                a.elevation_gain_m AS elevation_gain_m,
-                a.track_json AS track_json,
-                a.visibility AS visibility,
-                u.username, u.display_name, u.avatar_url,
-                (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id) AS likes_count,
-                (SELECT COUNT(*) FROM activity_comments c WHERE c.activity_id = a.id) AS comments_count,
-                (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id AND l.user_id = :vid) AS liked_by_me
-             FROM activities a
-             JOIN users u ON u.id = a.user_id
-             WHERE 1=1' . $whereActivity;
-    if ($aType !== '') $sqlA .= ' AND a.type = :atype';
-    $union[] = $sqlA;
-
-    $sqlP = 'SELECT
-                "post" AS kind,
-                p.id AS id,
-                p.user_id AS user_id,
-                p.created_at AS sort_at,
-                NULL AS type,
-                p.title AS title,
-                p.body AS description,
-                NULL AS distance_m,
-                NULL AS duration_sec,
-                NULL AS avg_speed_mps,
-                NULL AS elevation_gain_m,
-                NULL AS track_json,
-                p.visibility AS visibility,
-                u.username, u.display_name, u.avatar_url,
-                (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id) AS likes_count,
-                (SELECT COUNT(*) FROM post_comments c WHERE c.post_id = p.id) AS comments_count,
-                (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id AND l.user_id = :vid2) AS liked_by_me
-             FROM posts p
-             JOIN users u ON u.id = p.user_id
-             WHERE 1=1' . $wherePost;
-    $union[] = $sqlP;
-
-    $sql = '(' . implode(') UNION ALL (', $union) . ') ORDER BY sort_at DESC LIMIT :lim OFFSET :off';
-    $stmt = db()->prepare($sql);
-
-    $stmt->bindValue(':vid', $viewerId, PDO::PARAM_INT);
-    $stmt->bindValue(':vid2', $viewerId, PDO::PARAM_INT);
-
-    foreach ($bindSets['act'] as $name => $val) {
-        $stmt->bindValue(':' . $name, $val, PDO::PARAM_INT);
-    }
-    foreach ($bindSets['post'] as $name => $val) {
-        $stmt->bindValue(':' . $name, $val, PDO::PARAM_INT);
-    }
-    if ($aType !== '') $stmt->bindValue(':atype', $aType);
-
-    $stmt->bindValue(':lim', $limit, PDO::PARAM_INT);
-    $stmt->bindValue(':off', $offset, PDO::PARAM_INT);
-    $stmt->execute();
-    return $stmt->fetchAll();
 }
 
-function feed_activity_icon(string $t): string
-{
-    return match ($t) {
-        'run' => '🏃', 'ride' => '🚴', 'swim' => '🏊', 'ski' => '⛷️',
-        'walk' => '🚶', 'hike' => '🥾', default => '📦',
-    };
+if (!function_exists('feed_activity_icon')) {
+    function feed_activity_icon(string $t): string
+    {
+        return match ($t) {
+            'run' => '🏃', 'ride' => '🚴', 'swim' => '🏊', 'ski' => '⛷️',
+            'walk' => '🚶', 'hike' => '🥾', default => '📦',
+        };
+    }
 }
-function feed_activity_label(string $t): string
-{
-    return match ($t) {
-        'run' => 'Бег', 'ride' => 'Велосипед', 'swim' => 'Плавание',
-        'ski' => 'Лыжи', 'walk' => 'Ходьба', 'hike' => 'Хайкинг',
-        default => 'Другое',
-    };
+
+if (!function_exists('feed_activity_label')) {
+    function feed_activity_label(string $t): string
+    {
+        return match ($t) {
+            'run' => 'Бег', 'ride' => 'Велосипед', 'swim' => 'Плавание',
+            'ski' => 'Лыжи', 'walk' => 'Ходьба', 'hike' => 'Хайкинг',
+            default => 'Другое',
+        };
+    }
+}
+
+if (!function_exists('feed_format_activity_date')) {
+    function feed_format_activity_date(?string $iso): string
+    {
+        if (!$iso) return '';
+        $ts = strtotime($iso);
+        if ($ts === false) return '';
+        return date('d.m.Y H:i', $ts);
+    }
 }
 
 // ============================================================
@@ -183,7 +208,6 @@ foreach ($rows as $r) {
     else $postIds[] = (int)$r['id'];
 }
 
-// Комментарии к активностям
 $commentsByActivity = [];
 if ($activityIds) {
     $ph = implode(',', array_fill(0, count($activityIds), '?'));
@@ -196,7 +220,6 @@ if ($activityIds) {
     foreach ($stmt->fetchAll() as $c) $commentsByActivity[(int)$c['activity_id']][] = $c;
 }
 
-// Комментарии к постам
 $commentsByPost = [];
 if ($postIds) {
     $ph = implode(',', array_fill(0, count($postIds), '?'));
@@ -209,7 +232,6 @@ if ($postIds) {
     foreach ($stmt->fetchAll() as $c) $commentsByPost[(int)$c['post_id']][] = $c;
 }
 
-// Фото постов
 $photosByPost = [];
 if ($postIds) {
     $ph = implode(',', array_fill(0, count($postIds), '?'));
@@ -221,7 +243,6 @@ if ($postIds) {
     foreach ($stmt->fetchAll() as $ph2) $photosByPost[(int)$ph2['post_id']][] = $ph2;
 }
 
-// Фото активностей — одним запросом
 $photosByActivity = [];
 if ($activityIds) {
     $ph = implode(',', array_fill(0, count($activityIds), '?'));
@@ -233,7 +254,6 @@ if ($activityIds) {
     foreach ($stmt->fetchAll() as $ph2) $photosByActivity[(int)$ph2['activity_id']][] = $ph2;
 }
 
-// Треки активностей
 $tracksByActivity = [];
 foreach ($rows as $r) {
     if ($r['kind'] === 'activity') {
@@ -241,7 +261,29 @@ foreach ($rows as $r) {
     }
 }
 
-// Статистика сайдбара
+// ---- Усилия по сегментам ----
+$effortsByActivity = [];
+if ($activityIds && $me) {
+    try {
+        $effortsByActivity = Segment::effortsWithRanks($activityIds, (int)$me['id']);
+    } catch (Throwable $e) {
+        $effortsByActivity = [];
+    }
+}
+
+$effortCounts = [];
+foreach ($effortsByActivity as $aid => $list) {
+    $cnt = 0;
+    foreach ($list as $eff) {
+        $rank = $eff['rank'] ?? null;
+        $isTop3 = ($rank !== null && $rank >= 1 && $rank <= 3);
+        if ($isTop3 || !empty($eff['is_pb'])) {
+            $cnt++;
+        }
+    }
+    $effortCounts[$aid] = $cnt;
+}
+
 $myStats = ['activities' => 0, 'distance_m' => 0];
 try {
     $stats = User::stats((int)$me['id']);
@@ -263,17 +305,32 @@ $apiCommentPost  = url('api/post-comment.php');
 $apiFeed         = url('api/feed.php');
 $csrfToken       = csrf_token();
 
-$inlineJs = '
-window.__FEED_TRACKS__ = ' . json_encode($tracksByActivity, JSON_UNESCAPED_UNICODE) . ';
-window.__API_LIKE_ACT__ = ' . json_encode($apiLikeAct) . ';
-window.__API_COMMENT_ACT__ = ' . json_encode($apiCommentAct) . ';
-window.__API_LIKE_POST__ = ' . json_encode($apiLikePost) . ';
-window.__API_COMMENT_POST__ = ' . json_encode($apiCommentPost) . ';
-window.__API_FEED__ = ' . json_encode($apiFeed) . ';
-window.__FEED_TAB__ = ' . json_encode($tab) . ';
-window.__FEED_TYPE__ = ' . json_encode($type) . ';
-window.__FEED_HAS_MORE__ = ' . ($hasMore ? 'true' : 'false') . ';
-window.__CSRF__ = ' . json_encode($csrfToken) . ';
+// ============================================================
+// INLINE JS (аккуратно, без одинарных кавычек внутри)
+// ============================================================
+
+$tracksJson   = json_encode($tracksByActivity, JSON_UNESCAPED_UNICODE);
+$likeActJson  = json_encode($apiLikeAct);
+$commentActJson = json_encode($apiCommentAct);
+$likePostJson = json_encode($apiLikePost);
+$commentPostJson = json_encode($apiCommentPost);
+$feedApiJson  = json_encode($apiFeed);
+$tabJson      = json_encode($tab);
+$typeJson     = json_encode($type);
+$csrfJson     = json_encode($csrfToken);
+$hasMoreJs    = $hasMore ? 'true' : 'false';
+
+$inlineJs = <<<JS
+window.__FEED_TRACKS__ = {$tracksJson};
+window.__API_LIKE_ACT__ = {$likeActJson};
+window.__API_COMMENT_ACT__ = {$commentActJson};
+window.__API_LIKE_POST__ = {$likePostJson};
+window.__API_COMMENT_POST__ = {$commentPostJson};
+window.__API_FEED__ = {$feedApiJson};
+window.__FEED_TAB__ = {$tabJson};
+window.__FEED_TYPE__ = {$typeJson};
+window.__FEED_HAS_MORE__ = {$hasMoreJs};
+window.__CSRF__ = {$csrfJson};
 
 (function () {
     if (typeof L === "undefined") return;
@@ -311,7 +368,6 @@ window.__CSRF__ = ' . json_encode($csrfToken) . ';
     var moreBtn = document.getElementById("feed-more-btn");
     var moreWrap = document.getElementById("feed-more");
     var loaderEl = document.getElementById("feed-loader");
-    var sentinel = document.getElementById("feed-sentinel");
     if (!listEl || !moreBtn) return;
 
     function esc(s) {
@@ -343,22 +399,45 @@ window.__CSRF__ = ' . json_encode($csrfToken) . ';
         html += "</div>";
         return html;
     }
+    function buildEffortsHtml(a) {
+        if (!a.effort_count || a.effort_count <= 0) return "";
+        var json = JSON.stringify(a.efforts || []);
+        var safe = json.replace(/\\x27/g, "&#39;").replace(/</g, "\\\\u003c").replace(/>/g, "\\\\u003e");
+        return "<div class=\\"activity-card__efforts\\">" +
+            "<button type=\\"button\\" class=\\"efforts-badge js-efforts-btn\\" " +
+                "data-activity-id=\\"" + a.id + "\\" " +
+                "data-efforts=\\"" + safe + "\\" " +
+                "title=\\"Открыть список сегментов\\">" +
+                "<span class=\\"efforts-badge__icon\\">💪</span>" +
+                "<span class=\\"efforts-badge__label\\">Усилия</span>" +
+                "<span class=\\"efforts-badge__count\\">" + a.effort_count + "</span>" +
+            "</button>" +
+        "</div>";
+    }
     function buildActivityHtml(a) {
         var track = (a.track && a.track.length >= 2) ? "<a href=\\"" + a.url + "\\" class=\\"activity-card__map-link\\"><div class=\\"feed-map\\" data-activity-id=\\"" + a.id + "\\" data-initialized=\\"0\\"></div></a>" : "";
         var desc = (a.description && a.description.length) ? "<div class=\\"activity-card__description\\">" + esc(a.description).replace(/\\n/g,"<br>") + "</div>" : "";
-        var vis = a.visibility === "private" ? " · 🔒" : (a.visibility === "followers" ? " · 👥" : "");
+        var vis = a.visibility === "private" ? "🔒" : (a.visibility === "followers" ? "👥" : "");
         var av = a.author.avatar_url ? "<img src=\\"" + esc(a.author.avatar_url) + "\\" alt=\\"\\">" : esc(a.author.initial);
+        var dt = a.started_at_formatted ? esc(a.started_at_formatted) : esc(a.time_ago);
         return "<article class=\\"activity-card\\" id=\\"activity-" + a.id + "\\">" +
             "<div class=\\"activity-card__head\\">" +
                 "<a class=\\"activity-card__user\\" href=\\"" + esc(a.author.profile_url) + "\\"><span class=\\"avatar avatar--sm\\">" + av + "</span>" +
-                "<span class=\\"activity-card__meta\\"><span class=\\"activity-card__name\\">" + esc(a.author.display_name) + "</span>" +
-                "<span class=\\"activity-card__sub muted\\">@" + esc(a.author.username) + " · " + esc(a.time_ago) + vis + "</span></span></a>" +
+                "<span class=\\"activity-card__meta\\">" +
+                    "<span class=\\"activity-card__name\\">" + esc(a.author.display_name) + "</span>" +
+                    "<span class=\\"activity-card__info muted\\">" +
+                        "<span class=\\"activity-card__sub\\">@" + esc(a.author.username) + "</span>" +
+                        (dt ? "<span class=\\"activity-card__date\\">📅 " + dt + "</span>" : "") +
+                        (vis ? "<span class=\\"activity-card__vis\\">" + vis + "</span>" : "") +
+                    "</span>" +
+                "</span></a>" +
                 "<span class=\\"activity-type\\">" + a.type_icon + " " + esc(a.type_label) + "</span>" +
             "</div>" +
             "<a href=\\"" + a.url + "\\" class=\\"activity-card__title-link\\"><h3 class=\\"activity-card__title\\">" + esc(a.title) + "</h3></a>" +
             desc +
             track +
             buildActivityGallery(a.photos) +
+            buildEffortsHtml(a) +
             "<div class=\\"activity-card__stats\\">" +
                 "<div class=\\"stat\\"><span class=\\"stat__value\\">" + esc(a.distance) + "</span><span class=\\"stat__label\\">Дистанция</span></div>" +
                 "<div class=\\"stat\\"><span class=\\"stat__value\\">" + esc(a.duration) + "</span><span class=\\"stat__label\\">Время</span></div>" +
@@ -423,7 +502,7 @@ window.__CSRF__ = ' . json_encode($csrfToken) . ';
                     else html += buildPostHtml(it);
                 });
                 listEl.insertAdjacentHTML("beforeend", html);
-                listEl.querySelectorAll(".feed-map[data-initialized=\'0\']").forEach(function (el) { window.__feedInitMap(el); });
+                listEl.querySelectorAll(".feed-map[data-initialized=\\"0\\"]").forEach(function (el) { window.__feedInitMap(el); });
             }
             if (!hasMore) { if (moreWrap) moreWrap.style.display = "none"; }
             else if (moreBtn) moreBtn.disabled = false;
@@ -436,12 +515,6 @@ window.__CSRF__ = ' . json_encode($csrfToken) . ';
         });
     }
     if (moreBtn) moreBtn.addEventListener("click", function (e) { e.preventDefault(); loadMore(); });
-    if (sentinel && "IntersectionObserver" in window) {
-        var io = new IntersectionObserver(function (entries) {
-            entries.forEach(function (e) { if (e.isIntersecting && hasMore && !loading) loadMore(); });
-        }, { rootMargin: "400px" });
-        io.observe(sentinel);
-    }
 })();
 
 (function () {
@@ -583,11 +656,11 @@ window.__CSRF__ = ' . json_encode($csrfToken) . ';
         lb.id = "feed-lightbox";
         lb.hidden = true;
         lb.innerHTML =
-            "<button class=\"lightbox__close\" id=\"feed-lb-close\" aria-label=\"Закрыть\">×</button>" +
-            "<button class=\"lightbox__prev\" id=\"feed-lb-prev\" aria-label=\"Предыдущее\">‹</button>" +
-            "<button class=\"lightbox__next\" id=\"feed-lb-next\" aria-label=\"Следующее\">›</button>" +
-            "<div class=\"lightbox__counter\" id=\"feed-lb-counter\"></div>" +
-            "<div class=\"lightbox__img-wrap\"><img src=\"\" alt=\"\" id=\"feed-lb-img\"></div>";
+            "<button class=\\"lightbox__close\\" id=\\"feed-lb-close\\" aria-label=\\"Закрыть\\">×</button>" +
+            "<button class=\\"lightbox__prev\\" id=\\"feed-lb-prev\\" aria-label=\\"Предыдущее\\">‹</button>" +
+            "<button class=\\"lightbox__next\\" id=\\"feed-lb-next\\" aria-label=\\"Следующее\\">›</button>" +
+            "<div class=\\"lightbox__counter\\" id=\\"feed-lb-counter\\"></div>" +
+            "<div class=\\"lightbox__img-wrap\\"><img src=\\"\\" alt=\\"\\" id=\\"feed-lb-img\\"></div>";
         document.body.appendChild(lb);
     }
 
@@ -659,7 +732,138 @@ window.__CSRF__ = ' . json_encode($csrfToken) . ';
         else show(currentIndex + 1);
     });
 })();
-';
+
+/* МОДАЛКА УСИЛИЙ */
+(function () {
+    "use strict";
+
+    var modal = null;
+    var body = null;
+
+    function ensureModal() {
+        if (modal) return;
+        modal = document.createElement("div");
+        modal.className = "efforts-modal";
+        modal.id = "efforts-modal";
+        modal.hidden = true;
+        modal.innerHTML =
+            "<div class=\\"efforts-modal__backdrop\\" data-close></div>" +
+            "<div class=\\"efforts-modal__panel\\" role=\\"dialog\\" aria-modal=\\"true\\">" +
+                "<div class=\\"efforts-modal__head\\">" +
+                    "<h3 class=\\"efforts-modal__title\\">💪 Усилия на сегментах</h3>" +
+                    "<button type=\\"button\\" class=\\"efforts-modal__close\\" data-close aria-label=\\"Закрыть\\">×</button>" +
+                "</div>" +
+                "<div class=\\"efforts-modal__body\\" id=\\"efforts-modal-body\\"></div>" +
+            "</div>";
+        document.body.appendChild(modal);
+        body = modal.querySelector("#efforts-modal-body");
+
+        modal.addEventListener("click", function (e) {
+            if (e.target.closest("[data-close]")) close();
+        });
+        document.addEventListener("keydown", function (e) {
+            if (!modal.hidden && e.key === "Escape") close();
+        });
+    }
+
+    function esc(s) {
+        return String(s == null ? "" : s)
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;").replace(/\\x27/g, "&#039;");
+    }
+
+    function formatTime(sec) {
+        sec = parseInt(sec, 10) || 0;
+        var h = Math.floor(sec / 3600);
+        var m = Math.floor((sec % 3600) / 60);
+        var s = sec % 60;
+        function pad(n) { return n < 10 ? "0" + n : n; }
+        return h > 0 ? h + ":" + pad(m) + ":" + pad(s) : m + ":" + pad(s);
+    }
+
+    function formatDistance(m) {
+        m = parseFloat(m) || 0;
+        if (m < 1000) return Math.round(m) + " м";
+        return (m / 1000).toFixed(2).replace(".", ",") + " км";
+    }
+
+        function renderList(efforts) {
+        if (!efforts.length) {
+            return "<div class=\"efforts-modal__empty\">Сегментов на этой активности нет</div>";
+        }
+        var html = "<ul class=\"efforts-list\">";
+        efforts.forEach(function (e) {
+            var rank = e.rank;
+            var badge = "—";
+            var cls = "";
+
+            if (rank === 1)      { badge = "🥇"; cls = "efforts-list__item--gold"; }
+            else if (rank === 2) { badge = "🥈"; cls = "efforts-list__item--silver"; }
+            else if (rank === 3) { badge = "🥉"; cls = "efforts-list__item--bronze"; }
+            else if (e.is_pb)    { badge = "💪"; cls = "efforts-list__item--pb"; }
+
+            var rankText = "";
+            if (rank === 1) rankText = "1-е место";
+            else if (rank === 2) rankText = "2-е место";
+            else if (rank === 3) rankText = "3-е место";
+            else if (rank) rankText = "#" + rank + " в лидерборде";
+
+            var pbText = e.is_pb ? "Личный рекорд" : "";
+
+            var metaParts = [];
+            metaParts.push(formatDistance(e.segment_distance));
+            if (e.match_quality) metaParts.push("совпадение " + e.match_quality + "%");
+            if (e.is_auto) metaParts.push("авто");
+
+            var url = "/pulse/segment.php?id=" + encodeURIComponent(e.segment_id);
+
+            html +=
+                "<li class=\"efforts-list__li\">" +
+                    "<a class=\"efforts-list__item " + cls + "\" href=\"" + url + "\" " +
+                       "title=\"Открыть сегмент\">" +
+                        "<div class=\"efforts-list__rank\">" + badge + "</div>" +
+                        "<div class=\"efforts-list__body\">" +
+                            "<div class=\"efforts-list__name\">" + esc(e.segment_name) + "</div>" +
+                            "<div class=\"efforts-list__meta\">" + metaParts.join(" · ") + "</div>" +
+                            ((rankText || pbText) ? "<div class=\"efforts-list__badges\">" +
+                                (rankText ? "<span class=\"efforts-list__rank-text\">" + rankText + "</span>" : "") +
+                                (pbText ? "<span class=\"efforts-list__pb-text\">" + pbText + "</span>" : "") +
+                            "</div>" : "") +
+                        "</div>" +
+                        "<div class=\"efforts-list__time\">" + formatTime(e.elapsed_time_sec) + "</div>" +
+                    "</a>" +
+                "</li>";
+        });
+        html += "</ul>";
+        return html;
+    }
+
+    function open(efforts) {
+        ensureModal();
+        body.innerHTML = renderList(efforts);
+        modal.hidden = false;
+        document.body.style.overflow = "hidden";
+    }
+
+    function close() {
+        if (!modal) return;
+        modal.hidden = true;
+        document.body.style.overflow = "";
+    }
+
+    document.addEventListener("click", function (e) {
+        var btn = e.target.closest(".js-efforts-btn");
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        var raw = btn.dataset.efforts || "[]";
+        var efforts;
+        try { efforts = JSON.parse(raw); } catch (err) { efforts = []; }
+        open(efforts);
+    });
+})();
+JS;
 
 require __DIR__ . '/includes/header.php';
 ?>
@@ -679,7 +883,6 @@ require __DIR__ . '/includes/header.php';
                     <span class="sidebar-user__name"><?= e($me['display_name']) ?></span>
                     <span class="sidebar-user__meta">@<?= e($me['username']) ?></span>
                 </span>
-				
             </a>
             <div class="sidebar-user__stats">
                 <a href="<?= e(url('profile.php?u=' . urlencode((string)$me['username']))) ?>" class="sidebar-user__stat">
@@ -697,7 +900,8 @@ require __DIR__ . '/includes/header.php';
             <h3 class="sidebar-card__title">Действия</h3>
             <nav class="sidebar-nav">
                 <a href="<?= e(url('activity-upload.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">📂</span><span>Активность</span></a>
-                <a href="<?= e(url('post-create.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">✏️</span><span>Запись в блог</span></a>
+                <a href="<?= e(url('activity-create.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">✏️</span><span>Добавить вручную</span></a>
+                <a href="<?= e(url('post-create.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">📝</span><span>Запись в блог</span></a>
                 <a href="<?= e(url('route-create.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">🗺️</span><span>Маршрут</span></a>
                 <a href="<?= e(url('segment-create.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">⚡</span><span>Сегмент</span></a>
             </nav>
@@ -749,14 +953,14 @@ require __DIR__ . '/includes/header.php';
                 <?php if ($tab === 'mine'): ?>
                     <p>У вас пока нет ни активностей, ни записей.</p>
                     <a href="<?= e(url('activity-upload.php')) ?>" class="btn btn--primary">Загрузить активность</a>
-                    <a href="<?= e(url('post-create.php')) ?>" class="btn btn--ghost">Написать в блог</a>
+                    <a href="<?= e(url('activity-create.php')) ?>" class="btn btn--ghost">Добавить вручную</a>
                 <?php elseif ($tab === 'following'): ?>
                     <p>В подписках пока пусто.</p>
                     <a href="<?= e(url('search.php')) ?>" class="btn btn--primary">Найти людей</a>
                 <?php else: ?>
                     <p>В ленте пока нет записей.</p>
                     <a href="<?= e(url('activity-upload.php')) ?>" class="btn btn--primary">Загрузить активность</a>
-                    <a href="<?= e(url('post-create.php')) ?>" class="btn btn--ghost">Написать в блог</a>
+                    <a href="<?= e(url('activity-create.php')) ?>" class="btn btn--ghost">Добавить вручную</a>
                 <?php endif; ?>
             </div>
         <?php else: ?>
@@ -768,6 +972,12 @@ require __DIR__ . '/includes/header.php';
                             $aid = (int)$r['id'];
                             $hasTrack = !empty($tracksByActivity[$aid]);
                             $feedActPhotos = $photosByActivity[$aid] ?? [];
+                            $activityDate = feed_format_activity_date($r['started_at'] ?? null);
+                            if ($activityDate === '') {
+                                $activityDate = feed_format_activity_date($r['created_at'] ?? null);
+                            }
+                            $effortCount = $effortCounts[$aid] ?? 0;
+                            $effortList  = $effortsByActivity[$aid] ?? [];
                         ?>
                         <article class="activity-card" id="activity-<?= $aid ?>">
                             <div class="activity-card__head">
@@ -781,10 +991,16 @@ require __DIR__ . '/includes/header.php';
                                     </span>
                                     <span class="activity-card__meta">
                                         <span class="activity-card__name"><?= e($r['display_name']) ?></span>
-                                        <span class="activity-card__sub muted">
-                                            @<?= e($r['username']) ?> · <?= e(time_ago($sortAt)) ?>
-                                            <?php if ($r['visibility'] === 'private'): ?> · 🔒<?php endif; ?>
-                                            <?php if ($r['visibility'] === 'followers'): ?> · 👥<?php endif; ?>
+                                        <span class="activity-card__info muted">
+                                            <span class="activity-card__sub">@<?= e($r['username']) ?></span>
+                                            <?php if ($activityDate !== ''): ?>
+                                                <span class="activity-card__date">📅 <?= e($activityDate) ?></span>
+                                            <?php endif; ?>
+                                            <?php if ($r['visibility'] === 'private'): ?>
+                                                <span class="activity-card__vis">🔒</span>
+                                            <?php elseif ($r['visibility'] === 'followers'): ?>
+                                                <span class="activity-card__vis">👥</span>
+                                            <?php endif; ?>
                                         </span>
                                     </span>
                                 </a>
@@ -821,6 +1037,20 @@ require __DIR__ . '/includes/header.php';
                                         <button type="button" class="feed-gallery__nav feed-gallery__nav--next" aria-label="Следующее">›</button>
                                         <div class="feed-gallery__counter">1 / <?= count($feedActPhotos) ?></div>
                                     <?php endif; ?>
+                                </div>
+                            <?php endif; ?>
+
+                            <?php if ($effortCount > 0): ?>
+                                <div class="activity-card__efforts">
+                                    <button type="button"
+                                            class="efforts-badge js-efforts-btn"
+                                            data-activity-id="<?= $aid ?>"
+                                            data-efforts='<?= e(json_encode($effortList, JSON_UNESCAPED_UNICODE)) ?>'
+                                            title="Открыть список сегментов">
+                                        <span class="efforts-badge__icon">💪</span>
+                                        <span class="efforts-badge__label">Усилия</span>
+                                        <span class="efforts-badge__count"><?= (int)$effortCount ?></span>
+                                    </button>
                                 </div>
                             <?php endif; ?>
 
@@ -907,7 +1137,6 @@ require __DIR__ . '/includes/header.php';
                                         </span>
                                     </span>
                                 </a>
-                                
                             </div>
 
                             <a href="<?= e(url('post.php?id=' . $pid)) ?>" class="post-card__title-link">
@@ -915,14 +1144,14 @@ require __DIR__ . '/includes/header.php';
                             </a>
 
                             <?php if ($postPhotos): ?>
-    <div class="post-card__photos post-card__photos--<?= count($postPhotos) === 1 ? 'single' : 'multi' ?>">
-        <?php foreach ($postPhotos as $ph): ?>
-            <a href="<?= e(url('post.php?id=' . $pid)) ?>" class="post-card__photo">
-                <img src="<?= e($ph['url']) ?>" alt="">
-            </a>
-        <?php endforeach; ?>
-    </div>
-<?php endif; ?>
+                                <div class="post-card__photos post-card__photos--<?= count($postPhotos) === 1 ? 'single' : 'multi' ?>">
+                                    <?php foreach ($postPhotos as $ph): ?>
+                                        <a href="<?= e(url('post.php?id=' . $pid)) ?>" class="post-card__photo">
+                                            <img src="<?= e($ph['url']) ?>" alt="">
+                                        </a>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
 
                             <div class="post-card__body">
                                 <?= nl2br(e(mb_substr((string)$r['description'], 0, 400))) ?><?= mb_strlen((string)$r['description']) > 400 ? '…' : '' ?>
@@ -979,7 +1208,6 @@ require __DIR__ . '/includes/header.php';
                     <span class="feed-loader__dot"></span>
                     <span class="feed-loader__dot"></span>
                 </div>
-                <div id="feed-sentinel" style="height:1px"></div>
             </div>
         <?php endif; ?>
     </div>

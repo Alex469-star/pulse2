@@ -28,6 +28,9 @@ if ((int)$activity['user_id'] !== (int)$me['id']) {
 $gearList = Gear::allForUser((int)$me['id']);
 $editPhotos = Activity::photos($activityId);
 
+$hasTrack = !empty($activity['track_json']);
+$isManual = !$hasTrack; // ручная — если нет трека
+
 $pageTitle = 'Редактировать активность';
 
 $extraJs = [
@@ -38,11 +41,16 @@ $extraJs = [
 require __DIR__ . '/includes/header.php';
 ?>
 
-<section class="form-page">
+<section class="form-page form-page--wide">
     <div class="form-card">
         <h1 class="form-card__title">Редактировать активность</h1>
         <p class="form-card__subtitle">
-            Изменить название, описание, тип, видимость, привязку к инвентарю и фотографии.
+            <?php if ($isManual): ?>
+                Ручная тренировка — можно изменить любые поля, фото и видимость.
+            <?php else: ?>
+                Изменить название, описание, тип, видимость, метрики, фото.
+                Трек активности (карту) изменить нельзя.
+            <?php endif; ?>
         </p>
 
         <div id="edit-results" hidden></div>
@@ -104,6 +112,113 @@ require __DIR__ . '/includes/header.php';
                 </div>
             </div>
 
+            <!-- ============ ДАТА И ВРЕМЯ ============ -->
+            <div class="form-row">
+                <div class="field">
+                    <label for="started_date">Дата начала</label>
+                    <?php
+                        $startedDate = '';
+                        $startedTime = '';
+                        $startedAt = (string)($activity['started_at'] ?? $activity['created_at'] ?? '');
+                        if ($startedAt) {
+                            $ts = strtotime($startedAt);
+                            if ($ts !== false) {
+                                $startedDate = date('Y-m-d', $ts);
+                                $startedTime = date('H:i', $ts);
+                            }
+                        }
+                    ?>
+                    <input type="date" id="started_date" name="started_date" value="<?= e($startedDate) ?>">
+                </div>
+
+                <div class="field">
+                    <label for="started_time">Время начала</label>
+                    <input type="time" id="started_time" name="started_time" value="<?= e($startedTime) ?>">
+                </div>
+            </div>
+
+            <!-- ============ МЕТРИКИ ============ -->
+            <?php
+                $distanceKm = $activity['distance_m'] !== null
+                    ? number_format((float)$activity['distance_m'] / 1000, 2, '.', '')
+                    : '';
+
+                $durationHms = '';
+                if (!empty($activity['duration_sec'])) {
+                    $sec = (int)$activity['duration_sec'];
+                    $h = intdiv($sec, 3600);
+                    $m = intdiv($sec % 3600, 60);
+                    $s = $sec % 60;
+                    $durationHms = sprintf('%d:%02d:%02d', $h, $m, $s);
+                }
+            ?>
+
+            <h3 class="manual-section-title">Метрики <span class="muted">(можно уточнить вручную)</span></h3>
+
+            <div class="form-row">
+                <div class="field">
+                    <label for="distance_km">Дистанция (км)</label>
+                    <input type="number" id="distance_km" name="distance_km"
+                           step="0.01" min="0" max="1000"
+                           value="<?= e($distanceKm) ?>">
+                </div>
+
+                <div class="field">
+                    <label for="duration_hms">Длительность (ЧЧ:ММ:СС)</label>
+                    <input type="text" id="duration_hms" name="duration_hms"
+                           value="<?= e($durationHms) ?>" pattern="[0-9:]+"
+                           placeholder="0:52:18">
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="field">
+                    <label for="elevation_gain_m">Набор высоты (м)</label>
+                    <input type="number" id="elevation_gain_m" name="elevation_gain_m"
+                           step="1" min="0" max="10000"
+                           value="<?= $activity['elevation_gain_m'] !== null ? (int)$activity['elevation_gain_m'] : '' ?>">
+                </div>
+
+                <div class="field">
+                    <label for="calories">Калории (ккал)</label>
+                    <input type="number" id="calories" name="calories"
+                           step="1" min="0" max="10000"
+                           value="<?= $activity['calories'] !== null ? (int)$activity['calories'] : '' ?>">
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="field">
+                    <label for="avg_hr">Средний пульс (уд/мин)</label>
+                    <input type="number" id="avg_hr" name="avg_hr"
+                           step="1" min="0" max="250"
+                           value="<?= $activity['avg_hr'] !== null ? (int)$activity['avg_hr'] : '' ?>">
+                </div>
+
+                <div class="field">
+                    <label for="max_hr">Максимальный пульс (уд/мин)</label>
+                    <input type="number" id="max_hr" name="max_hr"
+                           step="1" min="0" max="250"
+                           value="<?= $activity['max_hr'] !== null ? (int)$activity['max_hr'] : '' ?>">
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="field">
+                    <label for="avg_cadence">Средний каденс (об/мин)</label>
+                    <input type="number" id="avg_cadence" name="avg_cadence"
+                           step="1" min="0" max="300"
+                           value="<?= $activity['avg_cadence'] !== null ? (int)$activity['avg_cadence'] : '' ?>">
+                </div>
+
+                <div class="field">
+                    <label for="avg_power_w">Средняя мощность (Вт)</label>
+                    <input type="number" id="avg_power_w" name="avg_power_w"
+                           step="1" min="0" max="2500"
+                           value="<?= $activity['avg_power_w'] !== null ? (int)$activity['avg_power_w'] : '' ?>">
+                </div>
+            </div>
+
             <?php if ($gearList): ?>
                 <div class="field">
                     <label for="gear_id">Инвентарь</label>
@@ -119,6 +234,7 @@ require __DIR__ . '/includes/header.php';
                 </div>
             <?php endif; ?>
 
+            <!-- ============ ФОТО ============ -->
             <?php if ($editPhotos): ?>
                 <div class="post-existing-photos">
                     <label>Фотографии активности</label>
@@ -138,14 +254,18 @@ require __DIR__ . '/includes/header.php';
             <?php endif; ?>
 
             <div class="field">
-                <label for="photos"><?= $editPhotos ? 'Добавить ещё фото' : 'Фото' ?> <span class="muted">(до 10 всего)</span></label>
+                <label for="photos"><?= $editPhotos ? 'Добавить ещё фото' : 'Добавить фото' ?> <span class="muted">(до 10 всего)</span></label>
                 <input type="file" id="photos" name="photos[]" accept="image/*,.heic,.heif" multiple>
                 <span class="field__hint">JPG, PNG, WEBP, HEIC · до 10 МБ каждое · максимум 10 фото на активность</span>
             </div>
 
-            
-
-            
+            <div id="edit-upload-progress" class="upload-progress" hidden>
+                <div class="upload-progress__bar-wrap">
+                    <div id="edit-upload-progress-bar" class="upload-progress__bar"></div>
+                </div>
+                <div id="edit-upload-progress-text" class="upload-progress__text">Подготовка…</div>
+                <div id="edit-upload-progress-hint" class="upload-progress__hint"></div>
+            </div>
 
             <div class="form-actions">
                 <button type="submit" class="btn btn--primary btn--large">Сохранить</button>

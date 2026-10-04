@@ -1,10 +1,6 @@
 <?php
 declare(strict_types=1);
 
-ini_set('display_errors', '1');
-ini_set('display_startup_errors', '1');
-error_reporting(E_ALL);
-
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/models/Segment.php';
 require_once __DIR__ . '/models/Activity.php';
@@ -66,7 +62,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $me) {
 
     if ($action === 'rematch') {
         try {
-            $result = SegmentMatcher::rematchUser((int)$me['id'], $segmentId);
+            // Пересчитываем ВСЕ активности ВСЕХ пользователей по этому сегменту
+            $result = SegmentMatcher::matchAllUsersForSegment($segmentId);
             $msg = sprintf(
                 'Обработано активностей: %d, найдено усилий: %d',
                 $result['processed'],
@@ -84,16 +81,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $me) {
 }
 
 // ============================================================
-// АВТОМАТИЧЕСКИЙ МАТЧИНГ
+// АВТОМАТИЧЕСКИЙ МАТЧИНГ (не чаще раза в 5 минут)
 // ============================================================
 if ($me) {
-    $autoKey = 'seg_matched_' . $segmentId;
-    if (empty($_SESSION[$autoKey])) {
-        try {
+    try {
+        $autoKey = 'seg_matched_' . $segmentId;
+        if (empty($_SESSION[$autoKey]) || (time() - (int)$_SESSION[$autoKey]) > 300) {
             SegmentMatcher::rematchUser((int)$me['id'], $segmentId);
             $_SESSION[$autoKey] = time();
-        } catch (Throwable $e) {}
-    }
+        }
+    } catch (Throwable $e) {}
 }
 
 // ---- Данные для страницы ----
@@ -115,7 +112,6 @@ try {
 
 $points = Segment::parseTrackJson((string)($segment['track_json'] ?? ''));
 
-// ---- Средняя скорость сегмента-эталона (для справки) ----
 $segmentDistance = (float)($segment['distance_m'] ?? 0);
 
 $pageTitle = $segment['name'];
@@ -204,7 +200,12 @@ function format_elapsed(int $seconds): string
                     <button class="btn btn--primary btn--sm">🔄 Пересчитать мои усилия</button>
                 </form>
             <?php endif; ?>
+
             <?php if ($isCreator): ?>
+                <a href="<?= e(url('segment-edit.php?id=' . $segmentId)) ?>"
+                   class="btn btn--ghost btn--sm">
+                    ✏️ Редактировать
+                </a>
                 <form method="post" style="display:inline"
                       onsubmit="return confirm('Удалить сегмент? Это необратимо.')">
                     <?= csrf_field() ?>
@@ -283,7 +284,6 @@ function format_elapsed(int $seconds): string
                             ? url('activity.php?id=' . (int)$row['activity_id'])
                             : url('profile.php?u=' . urlencode((string)$row['username']));
 
-                        // Средняя скорость
                         $avgSpeedMps = $row['avg_speed_mps'] ?? null;
                         $speedKmh = $avgSpeedMps ? (float)$avgSpeedMps * 3.6 : null;
                     ?>
