@@ -41,10 +41,34 @@ function send_mail(string $to, string $subject, string $htmlBody): bool
         $mail->Body    = $htmlBody;
         $mail->AltBody = strip_tags($htmlBody);
 
+// Временная отладка (убери на проде!)
+if (config('debug')) {
+    $mail->SMTPDebug = \PHPMailer\PHPMailer\SMTP::DEBUG_SERVER;
+    $mail->Debugoutput = function ($str, $level) {
+        log_to_file('mail.log', '[SMTP DEBUG] ' . trim($str));
+    };
+}
+
+$mail->SMTPOptions = [
+    'ssl' => [
+        'verify_peer'       => false,
+        'verify_peer_name'  => false,
+        'allow_self_signed' => true,
+    ],
+];
+
         $mail->send();
         return true;
     } catch (MailException $e) {
-        log_to_file('mail.log', "ERROR to $to: " . $mail->ErrorInfo);
+        log_to_file('mail.log', sprintf(
+            "ERROR to %s | host=%s:%d | secure=%s | SMTPDebug:\n%s\nErrorInfo: %s",
+            $to,
+            $cfg['host'],
+            (int)$cfg['port'],
+            $cfg['encryption'],
+            $mail->ErrorInfo,
+            $e->getMessage()
+        ));
         return false;
     }
 }

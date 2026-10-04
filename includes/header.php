@@ -90,7 +90,8 @@ if ($me) {
                     <span class="site-header__upload-icon">+</span>
                     <span class="site-header__upload-text">Активность</span>
                 </a>
-
+                
+                
                 <!-- Аватар с выпадающим меню -->
                 <div class="user-menu" id="user-menu">
                     <button type="button" class="user-menu__toggle" id="user-menu-toggle" aria-haspopup="true" aria-expanded="false">
@@ -121,6 +122,10 @@ if ($me) {
                         <a href="<?= e(url('my-posts.php')) ?>" class="user-menu__item">
                             <span class="user-menu__icon">📖</span> Мои посты
                         </a>
+                        
+                        <a href="<?= e(url('activity-create.php')) ?>" class="user-menu__item">
+    <span class="user-menu__icon">✏️</span> Добавить тренировку
+</a>
                         
                         <div class="user-menu__divider"></div>
                         <a href="<?= e(url('logout.php')) ?>" class="user-menu__item user-menu__item--danger">
@@ -171,6 +176,10 @@ if ($me) {
                 <a href="<?= e(url('segments.php')) ?>" class="mobile-menu__item">
                     <span class="mobile-menu__icon">⚡</span> Сегменты
                 </a>
+                
+                <a href="<?= e(url('activity-create.php')) ?>" class="mobile-menu__item">
+    <span class="mobile-menu__icon">✏️</span> Добавить вручную
+</a>
                 
                 <a href="<?= e(url('calendar.php')) ?>" class="mobile-menu__item">
     <span class="mobile-menu__icon">📅</span> Календарь

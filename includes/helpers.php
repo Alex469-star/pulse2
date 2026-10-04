@@ -327,3 +327,70 @@ function delete_uploaded_photo(string $url): void
     $path = __DIR__ . '/../' . $rel;
     if (is_file($path)) @unlink($path);
 }
+
+/* ============================================================
+   WAHOO OAUTH 2.0 + PKCE HELPERS
+   ============================================================ */
+
+/**
+ * Генерирует code_verifier для PKCE (RFC 7636).
+ * 64 символа из разрешённого набора [A-Za-z0-9-._~].
+ */
+function pkce_generate_verifier(int $length = 64): string
+{
+    $chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+    $max = strlen($chars) - 1;
+    $out = '';
+    for ($i = 0; $i < $length; $i++) {
+        $out .= $chars[random_int(0, $max)];
+    }
+    return $out;
+}
+
+/**
+ * code_challenge = BASE64URL(SHA256(verifier)), без padding.
+ */
+function pkce_generate_challenge(string $verifier): string
+{
+    $hash = hash('sha256', $verifier, true);
+    return rtrim(strtr(base64_encode($hash), '+/', '-_'), '=');
+}
+
+/**
+ * HTTP-запрос через cURL. Возвращает ['status' => int, 'body' => string, 'json' => ?array].
+ */
+function http_request(string $method, string $url, array $options = []): array
+{
+    $ch = curl_init($url);
+
+    $headers = $options['headers'] ?? [];
+    $body    = $options['body'] ?? null;
+
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CUSTOMREQUEST  => strtoupper($method),
+        CURLOPT_HTTPHEADER     => $headers,
+        CURLOPT_TIMEOUT        => 30,
+        CURLOPT_SSL_VERIFYPEER => true,
+    ]);
+
+    if ($body !== null) {
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+    }
+
+    $response = curl_exec($ch);
+    $status   = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $error    = curl_error($ch);
+    curl_close($ch);
+
+    if ($response === false) {
+        return ['status' => 0, 'body' => '', 'json' => null, 'error' => $error];
+    }
+
+    $json = json_decode($response, true);
+    return [
+        'status' => $status,
+        'body'   => $response,
+        'json'   => is_array($json) ? $json : null,
+    ];
+}

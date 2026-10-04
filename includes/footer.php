@@ -8,9 +8,9 @@
         </div>
         <p class="site-footer__copy">© <?= date('Y') ?> Pulse. Все права защищены.</p>
         <div class="site-footer__links">
-            <a href="<?= e(url('index.php')) ?>">О проекте</a>
-            <a href="#">Приватность</a>
-            <a href="#">Условия</a>
+            <a href="<?= e(url('about.php')) ?>">О проекте</a>
+            <a href="<?= e(url('privacy.php')) ?>">Приватность</a>
+            <a href="<?= e(url('terms.php')) ?>">Условия использования</a>
         </div>
     </div>
 </footer>
