@@ -1,21 +1,30 @@
 <?php
 declare(strict_types=1);
+
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/Notification.php';
 
 class Activity
 {
+    // ============================================================
+    // СОЗДАНИЕ / ЧТЕНИЕ / УДАЛЕНИЕ
+    // ============================================================
+
     public static function create(int $userId, array $d): int
     {
         $s = db()->prepare(
             'INSERT INTO activities
                 (user_id, type, title, description, started_at, duration_sec,
                  distance_m, elevation_gain_m, avg_speed_mps, max_speed_mps,
-                 calories, gear_id, track_json, visibility)
+                 calories, gear_id, track_json, visibility,
+                 avg_hr, max_hr, avg_cadence, max_cadence,
+                 avg_power_w, max_power_w, avg_temp_c, has_sensors)
              VALUES
                 (:user_id, :type, :title, :description, :started_at, :duration_sec,
                  :distance_m, :elevation_gain_m, :avg_speed_mps, :max_speed_mps,
-                 :calories, :gear_id, :track_json, :visibility)'
+                 :calories, :gear_id, :track_json, :visibility,
+                 :avg_hr, :max_hr, :avg_cadence, :max_cadence,
+                 :avg_power_w, :max_power_w, :avg_temp_c, :has_sensors)'
         );
         $s->execute([
             ':user_id'          => $userId,
@@ -32,6 +41,14 @@ class Activity
             ':gear_id'          => $d['gear_id'] ?? null,
             ':track_json'       => $d['track_json'] ?? null,
             ':visibility'       => $d['visibility'] ?? 'public',
+            ':avg_hr'           => $d['avg_hr'] ?? null,
+            ':max_hr'           => $d['max_hr'] ?? null,
+            ':avg_cadence'      => $d['avg_cadence'] ?? null,
+            ':max_cadence'      => $d['max_cadence'] ?? null,
+            ':avg_power_w'      => $d['avg_power_w'] ?? null,
+            ':max_power_w'      => $d['max_power_w'] ?? null,
+            ':avg_temp_c'       => $d['avg_temp_c'] ?? null,
+            ':has_sensors'      => $d['has_sensors'] ?? 0,
         ]);
         return (int)db()->lastInsertId();
     }
@@ -59,7 +76,7 @@ class Activity
                        OR (a.visibility = "followers" AND a.user_id IN (
                             SELECT following_id FROM follows WHERE follower_id = :vid3
                        )))
-                ORDER BY a.created_at DESC
+                ORDER BY COALESCE(a.started_at, a.created_at) DESC, a.id DESC
                 LIMIT :lim OFFSET :off';
         $s = db()->prepare($sql);
         $s->bindValue(':vid',  $viewerId, PDO::PARAM_INT);
@@ -71,19 +88,36 @@ class Activity
         return $s->fetchAll();
     }
 
-    public static function byUser(int $userId, int $limit = 30): array
+    /**
+     * Возвращает активности пользователя.
+     * Сортировка — по дате начала тренировки (started_at), с фолбэком на created_at.
+     */
+    public static function byUser(int $userId, int $limit = 20, int $offset = 0): array
     {
         $s = db()->prepare(
             'SELECT a.*,
               (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id) AS likes_count,
               (SELECT COUNT(*) FROM activity_comments c WHERE c.activity_id = a.id) AS comments_count
-             FROM activities a WHERE a.user_id = ?
-             ORDER BY a.created_at DESC LIMIT ?'
+             FROM activities a
+             WHERE a.user_id = ?
+             ORDER BY COALESCE(a.started_at, a.created_at) DESC, a.id DESC
+             LIMIT ? OFFSET ?'
         );
         $s->bindValue(1, $userId, PDO::PARAM_INT);
         $s->bindValue(2, $limit,  PDO::PARAM_INT);
+        $s->bindValue(3, $offset, PDO::PARAM_INT);
         $s->execute();
         return $s->fetchAll();
+    }
+
+    /**
+     * Общее число активностей пользователя — для пагинации.
+     */
+    public static function countByUser(int $userId): int
+    {
+        $s = db()->prepare('SELECT COUNT(*) FROM activities WHERE user_id = ?');
+        $s->execute([$userId]);
+        return (int)$s->fetchColumn();
     }
 
     public static function delete(int $id, int $userId): void
@@ -91,8 +125,8 @@ class Activity
         db()->prepare('DELETE FROM activities WHERE id = ? AND user_id = ?')
             ->execute([$id, $userId]);
     }
-    
-        // ============================================================
+
+    // ============================================================
     // ФОТО АКТИВНОСТИ
     // ============================================================
 
@@ -136,7 +170,6 @@ class Activity
 
     public static function deletePhoto(int $photoId, int $activityId, int $userId): bool
     {
-        // Убедимся, что активность принадлежит пользователю
         $act = self::findById($activityId);
         if (!$act || (int)$act['user_id'] !== $userId) return false;
 
@@ -166,43 +199,40 @@ class Activity
         $s->execute([$activityId]);
         return (int)$s->fetchColumn();
     }
-    
-        /**
- * Возвращает список пользователей, поставивших лайк активности.
- *
- * @return array<int, array{id:int, username:string, display_name:string, avatar_url:?string}>
- */
-public static function likers(int $activityId, int $limit = 100): array
-{
-    $limit = max(1, min(500, $limit));
 
-    $sql = "
-        SELECT u.id, u.username, u.display_name, u.avatar_url, al.created_at
-        FROM activity_likes al
-        JOIN users u ON u.id = al.user_id
-        WHERE al.activity_id = :aid
-        ORDER BY al.created_at DESC
-        LIMIT " . $limit . "
-    ";
+    /**
+     * Список пользователей, поставивших лайк активности.
+     */
+    public static function likers(int $activityId, int $limit = 100): array
+    {
+        $limit = max(1, min(500, $limit));
 
-    $stmt = db()->prepare($sql);
-    $stmt->bindValue(':aid', $activityId, PDO::PARAM_INT);
-    $stmt->execute();
+        $sql = "
+            SELECT u.id, u.username, u.display_name, u.avatar_url, al.created_at
+            FROM activity_likes al
+            JOIN users u ON u.id = al.user_id
+            WHERE al.activity_id = :aid
+            ORDER BY al.created_at DESC
+            LIMIT " . $limit . "
+        ";
 
-    $rows = $stmt->fetchAll();
-    $out = [];
-    foreach ($rows as $row) {
-        $out[] = [
-            'id'           => (int)$row['id'],
-            'username'     => (string)$row['username'],
-            'display_name' => (string)$row['display_name'],
-            'avatar_url'   => $row['avatar_url'] ?: null,
-            'initial'      => mb_substr((string)$row['display_name'], 0, 1),
-            'liked_at'     => (string)$row['created_at'],
-        ];
+        $stmt = db()->prepare($sql);
+        $stmt->bindValue(':aid', $activityId, PDO::PARAM_INT);
+        $stmt->execute();
+
+        $rows = $stmt->fetchAll();
+        $out = [];
+        foreach ($rows as $row) {
+            $out[] = [
+                'id'           => (int)$row['id'],
+                'username'     => (string)$row['username'],
+                'display_name' => (string)$row['display_name'],
+                'avatar_url'   => $row['avatar_url'] ?: null,
+                'initial'      => mb_substr((string)$row['display_name'], 0, 1),
+                'liked_at'     => (string)$row['created_at'],
+            ];
+        }
+
+        return $out;
     }
-
-    return $out;
-}
-        
 }
