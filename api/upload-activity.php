@@ -7,6 +7,7 @@ require_once __DIR__ . '/../models/Gear.php';
 require_once __DIR__ . '/../services/GpxParser.php';
 require_once __DIR__ . '/../services/TcxParser.php';
 require_once __DIR__ . '/../services/FitParser.php';
+require_once __DIR__ . '/../services/SegmentMatcher.php';
 
 api_check_csrf();
 $me = api_require_user();
@@ -34,7 +35,6 @@ if (!is_uploaded_file($file['tmp_name'])) {
     json_err('Файл не был загружен через HTTP', 400);
 }
 
-// Параметры из формы
 $title      = trim((string)($_POST['title'] ?? ''));
 $type       = (string)($_POST['type'] ?? 'run');
 $visibility = (string)($_POST['visibility'] ?? 'public');
@@ -47,7 +47,6 @@ if (!in_array($type, $allowedTypes, true)) $type = 'run';
 $allowedVisibility = ['public','followers','private'];
 if (!in_array($visibility, $allowedVisibility, true)) $visibility = 'public';
 
-// Проверяем gear_id
 $gear = null;
 if ($gearId > 0) {
     $g = Gear::findById($gearId);
@@ -56,7 +55,6 @@ if ($gearId > 0) {
     }
 }
 
-// Парсим файл
 try {
     $parsed = match ($ext) {
         'gpx' => GpxParser::parse($file['tmp_name']),
@@ -68,7 +66,6 @@ try {
     json_err($ex->getMessage(), 400);
 }
 
-// Прореживаем трек при необходимости
 $points = $parsed['points'];
 if (count($points) > 20000) {
     $step = (int)ceil(count($points) / 20000);
@@ -82,14 +79,12 @@ if (count($points) > 20000) {
     $points = $reduced;
 }
 
-// Заголовок
 $fileBase = pathinfo($originalName, PATHINFO_FILENAME);
 $finalTitle = $title !== ''
     ? ($isMulti ? $title . ' — ' . $fileBase : $title)
     : $fileBase;
 $finalTitle = mb_substr($finalTitle, 0, 190);
 
-// Сохраняем активность
 try {
     $activityId = Activity::create((int)$me['id'], [
         'type'             => $type,
@@ -117,6 +112,19 @@ try {
     json_err('Ошибка сохранения: ' . $ex->getMessage(), 500);
 }
 
+// ---- Автоматический матчинг сегментов ----
+$matched = 0;
+try {
+    $m = SegmentMatcher::matchAllForActivity($activityId);
+    $matched = (int)($m['matched'] ?? 0);
+} catch (Throwable $ex) {
+    log_to_file('segment-match.log', sprintf(
+        'Match failed for activity #%d: %s',
+        $activityId,
+        $ex->getMessage()
+    ));
+}
+
 json_ok([
     'activity_id' => $activityId,
     'title'       => $finalTitle,
@@ -126,5 +134,6 @@ json_ok([
         'elevation_gain_m' => $parsed['elevation_gain_m'],
         'points'           => count($points),
         'has_sensors'      => (int)($parsed['has_sensors'] ?? 0),
+        'matched'          => $matched,
     ],
 ]);
