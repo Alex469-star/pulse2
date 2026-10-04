@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Хост: localhost
--- Время создания: Сен 27 2026 г., 22:19
+-- Время создания: Окт 04 2026 г., 10:29
 -- Версия сервера: 8.0.46-0ubuntu0.24.04.4
 -- Версия PHP: 8.3.6
 
@@ -39,6 +39,14 @@ CREATE TABLE `activities` (
   `elevation_gain_m` decimal(8,2) DEFAULT NULL,
   `avg_speed_mps` decimal(6,3) DEFAULT NULL,
   `max_speed_mps` decimal(6,3) DEFAULT NULL,
+  `avg_hr` smallint UNSIGNED DEFAULT NULL,
+  `max_hr` smallint UNSIGNED DEFAULT NULL,
+  `avg_cadence` smallint UNSIGNED DEFAULT NULL,
+  `max_cadence` smallint UNSIGNED DEFAULT NULL,
+  `avg_power_w` smallint UNSIGNED DEFAULT NULL,
+  `max_power_w` smallint UNSIGNED DEFAULT NULL,
+  `avg_temp_c` decimal(4,1) DEFAULT NULL,
+  `has_sensors` tinyint(1) NOT NULL DEFAULT '0',
   `calories` int UNSIGNED DEFAULT NULL,
   `gear_id` int UNSIGNED DEFAULT NULL,
   `track_json` longtext COLLATE utf8mb4_unicode_ci,
@@ -243,6 +251,7 @@ CREATE TABLE `segments` (
   `elevation_gain_m` decimal(8,2) DEFAULT NULL,
   `track_json` longtext COLLATE utf8mb4_unicode_ci NOT NULL,
   `is_public` tinyint(1) NOT NULL DEFAULT '1',
+  `current_leader_id` int UNSIGNED DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -304,8 +313,28 @@ CREATE TABLE `users` (
   `units` enum('metric','imperial') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'metric',
   `is_public` tinyint(1) NOT NULL DEFAULT '1',
   `email_verified` tinyint(1) NOT NULL DEFAULT '0',
+  `wahoo_user_id` bigint UNSIGNED DEFAULT NULL,
+  `wahoo_access_token` varchar(512) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `wahoo_refresh_token` varchar(512) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `wahoo_code_verifier` varchar(128) COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `wahoo_expires_at` datetime DEFAULT NULL,
+  `wahoo_connected_at` datetime DEFAULT NULL,
   `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+
+--
+-- Структура таблицы `wahoo_synced_workouts`
+--
+
+CREATE TABLE `wahoo_synced_workouts` (
+  `id` bigint UNSIGNED NOT NULL,
+  `user_id` int UNSIGNED NOT NULL,
+  `wahoo_workout_id` bigint UNSIGNED NOT NULL,
+  `activity_id` int UNSIGNED NOT NULL,
+  `synced_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 --
@@ -421,7 +450,8 @@ ALTER TABLE `routes`
 ALTER TABLE `segments`
   ADD PRIMARY KEY (`id`),
   ADD KEY `creator_id` (`creator_id`),
-  ADD KEY `idx_public` (`is_public`);
+  ADD KEY `idx_public` (`is_public`),
+  ADD KEY `idx_current_leader` (`current_leader_id`);
 
 --
 -- Индексы таблицы `segment_efforts`
@@ -449,7 +479,16 @@ ALTER TABLE `users`
   ADD UNIQUE KEY `email` (`email`),
   ADD UNIQUE KEY `username` (`username`),
   ADD KEY `idx_username` (`username`),
-  ADD KEY `idx_email` (`email`);
+  ADD KEY `idx_email` (`email`),
+  ADD KEY `idx_wahoo_user` (`wahoo_user_id`);
+
+--
+-- Индексы таблицы `wahoo_synced_workouts`
+--
+ALTER TABLE `wahoo_synced_workouts`
+  ADD PRIMARY KEY (`id`),
+  ADD UNIQUE KEY `uniq_user_workout` (`user_id`,`wahoo_workout_id`),
+  ADD KEY `idx_activity` (`activity_id`);
 
 --
 -- AUTO_INCREMENT для сохранённых таблиц
@@ -538,6 +577,12 @@ ALTER TABLE `tokens`
 --
 ALTER TABLE `users`
   MODIFY `id` int UNSIGNED NOT NULL AUTO_INCREMENT;
+
+--
+-- AUTO_INCREMENT для таблицы `wahoo_synced_workouts`
+--
+ALTER TABLE `wahoo_synced_workouts`
+  MODIFY `id` bigint UNSIGNED NOT NULL AUTO_INCREMENT;
 
 --
 -- Ограничения внешнего ключа сохраненных таблиц
@@ -647,6 +692,13 @@ ALTER TABLE `segment_efforts`
 --
 ALTER TABLE `tokens`
   ADD CONSTRAINT `tokens_ibfk_1` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
+
+--
+-- Ограничения внешнего ключа таблицы `wahoo_synced_workouts`
+--
+ALTER TABLE `wahoo_synced_workouts`
+  ADD CONSTRAINT `ws_activity_fk` FOREIGN KEY (`activity_id`) REFERENCES `activities` (`id`) ON DELETE CASCADE,
+  ADD CONSTRAINT `ws_user_fk` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE;
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
