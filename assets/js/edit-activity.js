@@ -1,7 +1,3 @@
-/**
- * AJAX-сохранение формы редактирования активности + загрузка фото с прогрессом.
- * + удаление существующих фото.
- */
 (function () {
     "use strict";
 
@@ -15,18 +11,15 @@
     var progressText = document.getElementById("edit-upload-progress-text");
     var progressHint = document.getElementById("edit-upload-progress-hint");
     var resultsBox  = document.getElementById("edit-results");
-    var heicProgress = document.getElementById("heic-progress");
 
-    var API_UPDATE     = form.dataset.apiUpdate;
-    var API_ADD_PHOTO  = form.dataset.apiAddPhoto;
-    var API_DEL_PHOTO  = form.dataset.apiDelPhoto;
-    var ACTIVITY_ID    = form.dataset.activityId;
-    var ACTIVITY_URL   = form.dataset.activityUrl;
-    var CSRF           = form.dataset.csrf;
+    var API_UPDATE    = form.dataset.apiUpdate;
+    var API_ADD_PHOTO = form.dataset.apiAddPhoto;
+    var API_DEL_PHOTO = form.dataset.apiDelPhoto;
+    var ACTIVITY_ID   = form.dataset.activityId;
+    var ACTIVITY_URL  = form.dataset.activityUrl;
+    var CSRF          = form.dataset.csrf;
 
     var heicAvailable = typeof heic2any !== "undefined";
-
-    /* ---------- Утилиты ---------- */
 
     function setProgress(pct, text, hint) {
         if (progressBox) progressBox.hidden = false;
@@ -62,7 +55,12 @@
             .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
     }
 
-    /* ---------- Отправка одного файла с прогрессом ---------- */
+    function showError(msg) {
+        if (!resultsBox) { alert(msg); return; }
+        resultsBox.hidden = false;
+        resultsBox.innerHTML = '<div class="alert alert--error">' + escapeHtml(msg) + '</div>';
+        resultsBox.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
 
     function uploadFile(url, file, fields, onProgress) {
         return new Promise(function (resolve, reject) {
@@ -88,7 +86,6 @@
                 }
             };
             xhr.onerror = function () { reject(new Error("Сетевая ошибка")); };
-            xhr.onabort = function () { reject(new Error("Отменено")); };
 
             var fd = new FormData();
             Object.keys(fields || {}).forEach(function (k) { fd.append(k, fields[k]); });
@@ -96,8 +93,6 @@
             xhr.send(fd);
         });
     }
-
-    /* ---------- HEIC-конвертация ---------- */
 
     function isHeic(file) {
         var n = (file.name || "").toLowerCase();
@@ -129,17 +124,14 @@
         return chain.then(function () { return out; });
     }
 
-    /* ---------- Удаление существующих фото ---------- */
-
+    // ---- Удаление фото ----
     document.addEventListener("click", function (e) {
         var btn = e.target.closest(".js-delete-activity-photo");
         if (!btn) return;
         e.preventDefault();
         if (!confirm("Удалить фото?")) return;
 
-        var photoId = btn.dataset.photoId;
         btn.disabled = true;
-
         fetch(API_DEL_PHOTO, {
             method: "POST",
             credentials: "same-origin",
@@ -149,7 +141,7 @@
                 "Accept": "application/json"
             },
             body: JSON.stringify({
-                photo_id: photoId,
+                photo_id: btn.dataset.photoId,
                 activity_id: ACTIVITY_ID
             })
         })
@@ -169,9 +161,8 @@
         });
     });
 
-    /* ---------- Основной сабмит формы ---------- */
-
-    function handleSubmit(e) {
+    // ---- Отправка формы ----
+    form.addEventListener("submit", function (e) {
         e.preventDefault();
 
         var photoFiles = photosInput && photosInput.files ? Array.from(photosInput.files) : [];
@@ -184,28 +175,20 @@
         setButtonLoading(true);
         setProgress(0, "Сохранение изменений…", "");
 
-        var fields = {
-            activity_id: ACTIVITY_ID,
-            title: form.querySelector("#title") ? form.querySelector("#title").value : "",
-            description: form.querySelector("#description") ? form.querySelector("#description").value : "",
-            type: form.querySelector("#type") ? form.querySelector("#type").value : "run",
-            visibility: form.querySelector("#visibility") ? form.querySelector("#visibility").value : "public",
-            gear_id: form.querySelector("#gear_id") ? form.querySelector("#gear_id").value : ""
-        };
+        var fd = new FormData(form);
+        fd.set("activity_id", ACTIVITY_ID);
+        fd.set("csrf", CSRF);
+        fd.delete("photos[]");
 
-        // Шаг 1 — сохранение полей
         var xhr = new XMLHttpRequest();
         xhr.open("POST", API_UPDATE, true);
         xhr.withCredentials = true;
         xhr.setRequestHeader("X-CSRF-Token", CSRF);
         xhr.setRequestHeader("Accept", "application/json");
 
-        var fd = new FormData();
-        Object.keys(fields).forEach(function (k) { fd.append(k, fields[k]); });
-
         xhr.onload = function () {
             var data = null;
-            try { data = JSON.parse(xhr.responseText); } catch (e) {}
+            try { data = JSON.parse(xhr.responseText); } catch (err) {}
 
             if (!(xhr.status >= 200 && xhr.status < 300 && data && data.ok)) {
                 setButtonLoading(false);
@@ -214,7 +197,7 @@
                 return;
             }
 
-            // Шаг 2 — загрузка фото
+            // Если фото нет — сразу редирект
             if (!photoFiles.length) {
                 finish();
                 return;
@@ -222,7 +205,6 @@
 
             setProgress(40, "Конвертация фото…", "");
             convertHeic(photoFiles).then(function (converted) {
-                var done = 0;
                 var errors = [];
                 var chain = Promise.resolve();
 
@@ -236,7 +218,6 @@
                             var overall = 40 + ((idx + perFile) / converted.length) * 60;
                             setProgress(overall, "Фото " + (idx + 1) + " из " + converted.length, file.name);
                         })
-                        .then(function () { done++; })
                         .catch(function (err) {
                             errors.push({ file: file.name, message: err.message });
                         });
@@ -245,10 +226,9 @@
 
                 chain.then(function () {
                     if (errors.length) {
-                        showError("Часть фото не загрузилась: " + errors.map(function (x) { return x.file + ": " + x.message; }).join("; "));
-                    } else {
-                        finish();
+                        console.warn("Часть фото не загрузилась:", errors);
                     }
+                    finish();
                 });
             });
         };
@@ -260,7 +240,7 @@
         };
 
         xhr.send(fd);
-    }
+    });
 
     function finish() {
         setProgress(100, "Готово", "Перенаправление…");
@@ -268,16 +248,4 @@
             window.location.href = ACTIVITY_URL + ACTIVITY_ID;
         }, 400);
     }
-
-    function showError(msg) {
-        if (!resultsBox) {
-            alert(msg);
-            return;
-        }
-        resultsBox.hidden = false;
-        resultsBox.innerHTML =
-            '<div class="alert alert--error">' + escapeHtml(msg) + '</div>';
-    }
-
-    form.addEventListener("submit", handleSubmit);
 })();
