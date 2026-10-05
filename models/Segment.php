@@ -366,6 +366,24 @@ class Segment
         return $out;
     }
 
+    /**
+     * Лидерборд с расширенными метриками:
+     *   - best_time       — лучшее время пользователя на сегменте
+     *   - activity_id     — активность, где было достигнуто это время
+     *   - started_at      — дата старта этой активности
+     *   - avg_speed_mps   — средняя скорость на сегменте (distance / best_time)
+     *   - avg_hr          — средний пульс из активности
+     *   - avg_power_w     — средняя мощность из активности
+     *
+     * Метрики активности (hr/power) подтягиваются одним запросом,
+     * а не N+1 в цикле.
+     *
+     * @return array<int,array{
+     *     user_id:int, username:string, display_name:string, avatar_url:?string,
+     *     best_time:int, activity_id:int, started_at:?string,
+     *     avg_speed_mps:?float, avg_hr:?int, avg_power_w:?int
+     * }>
+     */
     public static function leaderboard(int $segmentId, int $limit = 100): array
     {
         $limit = max(1, min(500, $limit));
@@ -378,11 +396,11 @@ class Segment
                 u.avatar_url,
                 MIN(e.elapsed_time_sec) AS best_time,
                 SUBSTRING_INDEX(
-                    GROUP_CONCAT(e.activity_id ORDER BY e.elapsed_time_sec ASC),
+                    GROUP_CONCAT(e.activity_id ORDER BY e.elapsed_time_sec ASC, e.id ASC),
                     ",", 1
                 ) AS activity_id,
                 SUBSTRING_INDEX(
-                    GROUP_CONCAT(e.started_at ORDER BY e.elapsed_time_sec ASC),
+                    GROUP_CONCAT(e.started_at ORDER BY e.elapsed_time_sec ASC, e.id ASC),
                     ",", 1
                 ) AS started_at
             FROM segment_efforts e
@@ -396,20 +414,139 @@ class Segment
         $stmt->bindValue(':sid', $segmentId, PDO::PARAM_INT);
         $stmt->execute();
         $rows = $stmt->fetchAll();
+        if (!$rows) return [];
 
-        $segment = self::findById($segmentId);
-        $distance = $segment ? (float)$segment['distance_m'] : 0.0;
+        // ---- Подтягиваем метрики активностей одним запросом ----
+        $activityIds = array_values(array_unique(array_filter(array_map(
+            static fn($r) => (int)($r['activity_id'] ?? 0),
+            $rows
+        ))));
+
+        $actMetrics = [];
+        if ($activityIds) {
+            $ph = implode(',', array_fill(0, count($activityIds), '?'));
+            try {
+                $s = db()->prepare(
+                    "SELECT id, avg_hr, max_hr, avg_power_w, max_power_w,
+                            avg_speed_mps, max_speed_mps, started_at
+                       FROM activities
+                      WHERE id IN ($ph)"
+                );
+                $s->execute($activityIds);
+                foreach ($s->fetchAll() as $a) {
+                    $actMetrics[(int)$a['id']] = $a;
+                }
+            } catch (Throwable $e) {
+                // Если колонок нет в БД или запрос упал — просто не будет метрик
+                $actMetrics = [];
+            }
+        }
+
+        // ---- Дистанция сегмента один раз ----
+        $distance = self::segmentDistance($segmentId);
 
         foreach ($rows as &$r) {
-            $r['activity_id']  = (int)$r['activity_id'];
-            $r['best_time']    = (int)$r['best_time'];
+            $aid = (int)$r['activity_id'];
+            $r['activity_id'] = $aid;
+            $r['best_time']   = (int)$r['best_time'];
+
+            // Скорость считаем по сегменту, а не по всей активности
             $r['avg_speed_mps'] = ($distance > 0 && $r['best_time'] > 0)
                 ? $distance / $r['best_time']
                 : null;
+
+            $m = $actMetrics[$aid] ?? null;
+            $r['avg_hr']      = ($m && $m['avg_hr']      !== null) ? (int)$m['avg_hr']      : null;
+            $r['avg_power_w'] = ($m && $m['avg_power_w'] !== null) ? (int)$m['avg_power_w'] : null;
+
+            // Если started_at не пришёл из GROUP_CONCAT (бывает при NULL),
+            // добираем из активности
+            if (empty($r['started_at']) && $m && !empty($m['started_at'])) {
+                $r['started_at'] = $m['started_at'];
+            }
         }
         unset($r);
 
         return $rows;
+    }
+
+    /**
+     * Профиль высот сегмента.
+     * Возвращает массив [{d: метры от старта, ele: высота}] длиной до $maxPoints.
+     * Если высот в треке нет — возвращает [].
+     */
+    public static function elevationProfile(int $segmentId, int $maxPoints = 800): array
+    {
+        try {
+            $s = db()->prepare('SELECT track_json FROM segments WHERE id = ? LIMIT 1');
+            $s->execute([$segmentId]);
+            $json = (string)$s->fetchColumn();
+        } catch (Throwable $e) {
+            return [];
+        }
+
+        $points = self::parseTrackJson($json);
+        if (count($points) < 2) return [];
+
+        // Проверяем, есть ли вообще высоты
+        $hasEle = false;
+        foreach ($points as $p) {
+            if ($p['ele'] !== null) { $hasEle = true; break; }
+        }
+        if (!$hasEle) return [];
+
+        // Кумулятивная дистанция
+        $out = [];
+        $dist = 0.0;
+        $prev = null;
+
+        foreach ($points as $p) {
+            if ($prev !== null) {
+                $dist += self::haversine(
+                    (float)$prev['lat'], (float)$prev['lng'],
+                    (float)$p['lat'],    (float)$p['lng']
+                );
+            }
+            $prev = $p;
+
+            if ($p['ele'] === null) continue;
+            $out[] = [
+                'd'   => round($dist, 1),
+                'ele' => round((float)$p['ele'], 1),
+            ];
+        }
+        if (count($out) < 2) return [];
+
+        // Прореживание (равномерное, с сохранением последней точки)
+        $n = count($out);
+        if ($n > $maxPoints) {
+            $step = (int)ceil($n / $maxPoints);
+            $kept = [];
+            for ($i = 0; $i < $n; $i += $step) $kept[] = $out[$i];
+            if (end($kept) !== end($out)) $kept[] = end($out);
+            $out = $kept;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Дистанция сегмента с кэшем в пределах запроса.
+     */
+    private static function segmentDistance(int $segmentId): float
+    {
+        static $cache = [];
+        if (array_key_exists($segmentId, $cache)) return $cache[$segmentId];
+
+        try {
+            $s = db()->prepare('SELECT distance_m FROM segments WHERE id = ? LIMIT 1');
+            $s->execute([$segmentId]);
+            $v = $s->fetchColumn();
+            $cache[$segmentId] = ($v !== false && $v !== null) ? (float)$v : 0.0;
+        } catch (Throwable $e) {
+            $cache[$segmentId] = 0.0;
+        }
+        return $cache[$segmentId];
     }
 
     public static function userRank(int $segmentId, int $userId): ?int
@@ -542,9 +679,6 @@ class Segment
     // ЛИДЕРСТВО (для уведомлений)
     // ============================================================
 
-    /**
-     * Кто сейчас лидер сегмента — по данным segment_efforts.
-     */
     public static function currentLeader(int $segmentId): ?int
     {
         $s = db()->prepare(
@@ -559,9 +693,6 @@ class Segment
         return $uid !== false ? (int)$uid : null;
     }
 
-    /**
-     * Сохранённый в БД лидер сегмента (кто был лидером на прошлой итерации).
-     */
     private static function storedLeader(int $segmentId): ?int
     {
         $s = db()->prepare('SELECT current_leader_id FROM segments WHERE id = ? LIMIT 1');
@@ -570,9 +701,6 @@ class Segment
         return $val !== false && $val !== null ? (int)$val : null;
     }
 
-    /**
-     * Обновляет сохранённого лидера в БД.
-     */
     private static function saveStoredLeader(int $segmentId, ?int $leaderId): void
     {
         try {
@@ -583,33 +711,22 @@ class Segment
         }
     }
 
-    /**
-     * Уведомляет о смене лидера ТОЛЬКО если лидер реально изменился
-     * по сравнению с сохранённым в segments.current_leader_id.
-     *
-     * Вызывается после матчинга. Никаких внешних аргументов не нужно —
-     * метод сам сходит в БД за старым значением и обновит его.
-     */
     public static function notifyLeadershipChange(int $segmentId): void
     {
         $newLeaderId = self::currentLeader($segmentId);
         $oldLeaderId = self::storedLeader($segmentId);
 
-        // Если лидер не изменился — молча выходим
         if ($oldLeaderId === $newLeaderId) {
             return;
         }
 
-        // Сохраняем новое значение в БД (даже если новый лидер = null)
         self::saveStoredLeader($segmentId, $newLeaderId);
 
-        // Если лидера вообще нет — уведомлять некого
         if ($newLeaderId === null) return;
 
         $segment = self::findById($segmentId);
         if (!$segment) return;
 
-        // Уведомляем нового лидера
         try {
             Notification::push(
                 $newLeaderId,
@@ -621,7 +738,6 @@ class Segment
             );
         } catch (Throwable $e) {}
 
-        // Уведомляем старого лидера о потере
         if ($oldLeaderId !== null) {
             try {
                 Notification::push(

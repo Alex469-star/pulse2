@@ -50,7 +50,11 @@ class Activity
             ':avg_temp_c'       => $d['avg_temp_c'] ?? null,
             ':has_sensors'      => $d['has_sensors'] ?? 0,
         ]);
-        return (int)db()->lastInsertId();
+
+        $activityId = (int)db()->lastInsertId();
+        self::gameHookCapture($activityId);
+
+        return $activityId;
     }
 
     public static function findById(int $id): ?array
@@ -89,9 +93,36 @@ class Activity
     }
 
     /**
-     * Возвращает активности пользователя.
-     * Сортировка — по дате начала тренировки (started_at), с фолбэком на created_at.
+     * Активности участников клубов, в которых состоит пользователь.
+     * Исключает собственные (их видно во вкладке «Мои»).
      */
+    public static function feedFromClubs(int $viewerId, int $limit = 20, int $offset = 0): array
+    {
+        $sql = 'SELECT DISTINCT a.*, u.username, u.display_name, u.avatar_url,
+                  (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id) AS likes_count,
+                  (SELECT COUNT(*) FROM activity_comments c WHERE c.activity_id = a.id) AS comments_count,
+                  (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id AND l.user_id = :vid) AS liked_by_me
+                FROM activities a
+                JOIN users u ON u.id = a.user_id
+                JOIN club_members cm
+                     ON cm.user_id = u.id
+                    AND cm.status = "active"
+                JOIN club_members mine
+                     ON mine.club_id = cm.club_id
+                    AND mine.user_id = :vid2
+                    AND mine.status = "active"
+                WHERE a.visibility = "public"
+                ORDER BY COALESCE(a.started_at, a.created_at) DESC, a.id DESC
+                LIMIT :lim OFFSET :off';
+        $s = db()->prepare($sql);
+        $s->bindValue(':vid',  $viewerId, PDO::PARAM_INT);
+        $s->bindValue(':vid2', $viewerId, PDO::PARAM_INT);
+        $s->bindValue(':lim',  $limit,    PDO::PARAM_INT);
+        $s->bindValue(':off',  $offset,   PDO::PARAM_INT);
+        $s->execute();
+        return $s->fetchAll();
+    }
+
     public static function byUser(int $userId, int $limit = 20, int $offset = 0): array
     {
         $s = db()->prepare(
@@ -110,9 +141,6 @@ class Activity
         return $s->fetchAll();
     }
 
-    /**
-     * Общее число активностей пользователя — для пагинации.
-     */
     public static function countByUser(int $userId): int
     {
         $s = db()->prepare('SELECT COUNT(*) FROM activities WHERE user_id = ?');
@@ -122,6 +150,7 @@ class Activity
 
     public static function delete(int $id, int $userId): void
     {
+        self::gameHookRevert($id);
         db()->prepare('DELETE FROM activities WHERE id = ? AND user_id = ?')
             ->execute([$id, $userId]);
     }
@@ -200,9 +229,6 @@ class Activity
         return (int)$s->fetchColumn();
     }
 
-    /**
-     * Список пользователей, поставивших лайк активности.
-     */
     public static function likers(int $activityId, int $limit = 100): array
     {
         $limit = max(1, min(500, $limit));
@@ -234,5 +260,56 @@ class Activity
         }
 
         return $out;
+    }
+
+    // ============================================================
+    // ХУКИ В МОДУЛЬ GAME
+    // ============================================================
+
+    private static function gameHookCapture(int $activityId): void
+    {
+        $bootstrap = __DIR__ . '/../game/includes/bootstrap.php';
+        if (!is_file($bootstrap)) return;
+
+        try { require_once $bootstrap; } catch (\Throwable $e) { return; }
+        if (!class_exists(\Pulse\Game\TerritoryEngine::class)) return;
+
+        try {
+            $inTransaction = false;
+            try { $inTransaction = db()->inTransaction(); } catch (\Throwable $e) {}
+
+            if ($inTransaction) {
+                \Pulse\Game\TerritoryEngine::enqueueOnly($activityId);
+                return;
+            }
+            \Pulse\Game\TerritoryEngine::queue($activityId);
+        } catch (\Throwable $e) {
+            if (function_exists('game_log')) {
+                game_log('Activity::gameHookCapture failed', [
+                    'activity_id' => $activityId,
+                    'err'         => $e->getMessage(),
+                ]);
+            }
+        }
+    }
+
+    private static function gameHookRevert(int $activityId): void
+    {
+        $bootstrap = __DIR__ . '/../game/includes/bootstrap.php';
+        if (!is_file($bootstrap)) return;
+
+        try { require_once $bootstrap; } catch (\Throwable $e) { return; }
+        if (!class_exists(\Pulse\Game\TerritoryEngine::class)) return;
+
+        try {
+            \Pulse\Game\TerritoryEngine::revertByActivity($activityId);
+        } catch (\Throwable $e) {
+            if (function_exists('game_log')) {
+                game_log('Activity::gameHookRevert failed', [
+                    'activity_id' => $activityId,
+                    'err'         => $e->getMessage(),
+                ]);
+            }
+        }
     }
 }

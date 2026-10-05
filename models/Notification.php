@@ -9,29 +9,35 @@ class Notification
     /**
      * Создать уведомление.
      */
+        /**
+     * Создать уведомление.
+     */
     public static function push(
         int $userId,
         string $type,
         ?int $actorId = null,
         ?string $targetType = null,
         ?int $targetId = null,
-        ?string $message = null
+        ?string $message = null,
+        ?string $url = null
     ): void {
         if ($actorId === $userId) return;
 
         $allowed = [
             'like', 'comment', 'follow', 'mention', 'system',
             'segment_new_lead', 'segment_lost_lead',
+            'territory_captured', 'territory_lost', 'territory_stolen',
+            'club_invite', 'club_join', 'club_post', 'club_role', 'club_event',
         ];
         if (!in_array($type, $allowed, true)) return;
 
         try {
             $s = db()->prepare(
                 'INSERT INTO notifications
-                    (user_id, type, actor_id, target_type, target_id, message)
-                 VALUES (?, ?, ?, ?, ?, ?)'
+                    (user_id, type, actor_id, target_type, target_id, message, url)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)'
             );
-            $s->execute([$userId, $type, $actorId, $targetType, $targetId, $message]);
+            $s->execute([$userId, $type, $actorId, $targetType, $targetId, $message, $url]);
         } catch (Throwable $e) {
             log_to_file('notifications.log', $e->getMessage());
         }
@@ -40,7 +46,7 @@ class Notification
     /**
      * Пакетная вставка уведомлений.
      */
-    public static function pushMany(array $items): void
+        public static function pushMany(array $items): void
     {
         foreach ($items as $item) {
             self::push(
@@ -49,7 +55,8 @@ class Notification
                 isset($item['actor_id'])   ? (int)$item['actor_id']    : null,
                 $item['target_type'] ?? null,
                 isset($item['target_id'])  ? (int)$item['target_id']   : null,
-                $item['message'] ?? null
+                $item['message'] ?? null,
+                $item['url'] ?? null
             );
         }
     }
@@ -69,7 +76,7 @@ class Notification
     /**
      * Все уведомления пользователя.
      */
-    public static function allForUser(int $userId, int $limit = 50): array
+        public static function allForUser(int $userId, int $limit = 50): array
     {
         $s = db()->prepare(
             'SELECT n.*, u.username, u.display_name, u.avatar_url
