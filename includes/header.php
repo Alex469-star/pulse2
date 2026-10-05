@@ -31,6 +31,9 @@ if ($me) {
     <?php foreach (($extraCss ?? []) as $css): ?>
         <link rel="stylesheet" href="<?= e($css) ?>">
     <?php endforeach; ?>
+    <?php foreach (($extraJs ?? []) as $js): ?>
+        <script src="<?= e($js) ?>"></script>
+    <?php endforeach; ?>
 </head>
 <body class="<?= e($bodyClass ?? '') ?>">
 
@@ -38,33 +41,28 @@ if ($me) {
 <header class="site-header" id="site-header">
     <div class="container site-header__inner">
 
-        <!-- Бургер (только мобильные) -->
         <button type="button" class="burger" id="burger" aria-label="Меню" aria-expanded="false">
             <span class="burger__line"></span>
             <span class="burger__line"></span>
             <span class="burger__line"></span>
         </button>
 
-        <!-- Логотип -->
         <a href="<?= e(url('index.php')) ?>" class="logo">
             <span class="logo__mark">P</span>
             <span class="logo__text">Pulse</span>
         </a>
 
-        <!-- Навигация (десктоп) -->
         <nav class="nav" id="desktop-nav">
             <?php if ($me): ?>
                 <a href="<?= e(url('feed.php')) ?>" class="nav__link <?= is_current('feed.php') ?>">Лента</a>
                 <a href="<?= e(url('calendar.php')) ?>" class="nav__link <?= is_current('calendar.php') ?>">Календарь</a>
                 <a href="<?= e(url('routes.php')) ?>" class="nav__link <?= is_current('routes.php') ?>">Маршруты</a>
                 <a href="<?= e(url('segments.php')) ?>" class="nav__link <?= is_current('segments.php') ?>">Сегменты</a>
-                <a href="<?= e(url('gear.php')) ?>" class="nav__link <?= is_current('gear.php') ?>">Инвентарь</a>
-            <?php else: ?>
-                
+                <a href="<?= e(url('heatmap.php')) ?>" class="nav__link <?= is_current('heatmap.php') ?>">Карта</a>
+                <a href="<?= e(url('clubs.php')) ?>" class="nav__link <?= is_current('clubs.php') ?>">Клубы</a>
             <?php endif; ?>
         </nav>
 
-        <!-- Действия (десктоп + мобильные иконки) -->
         <div class="site-header__actions">
             <?php if ($me): ?>
                 <a href="<?= e(url('search.php')) ?>" class="icon-btn" title="Поиск" aria-label="Поиск">
@@ -90,9 +88,7 @@ if ($me) {
                     <span class="site-header__upload-icon">+</span>
                     <span class="site-header__upload-text">Активность</span>
                 </a>
-                
-                
-                <!-- Аватар с выпадающим меню -->
+
                 <div class="user-menu" id="user-menu">
                     <button type="button" class="user-menu__toggle" id="user-menu-toggle" aria-haspopup="true" aria-expanded="false">
                         <span class="avatar avatar--sm">
@@ -118,15 +114,12 @@ if ($me) {
                         <a href="<?= e(url('gear.php')) ?>" class="user-menu__item">
                             <span class="user-menu__icon">🎒</span> Инвентарь
                         </a>
-                        
                         <a href="<?= e(url('my-posts.php')) ?>" class="user-menu__item">
                             <span class="user-menu__icon">📖</span> Мои посты
                         </a>
-                        
                         <a href="<?= e(url('activity-create.php')) ?>" class="user-menu__item">
-    <span class="user-menu__icon">✏️</span> Добавить тренировку
-</a>
-                        
+                            <span class="user-menu__icon">✏️</span> Добавить тренировку
+                        </a>
                         <div class="user-menu__divider"></div>
                         <a href="<?= e(url('logout.php')) ?>" class="user-menu__item user-menu__item--danger">
                             <span class="user-menu__icon">🚪</span> Выйти
@@ -176,15 +169,18 @@ if ($me) {
                 <a href="<?= e(url('segments.php')) ?>" class="mobile-menu__item">
                     <span class="mobile-menu__icon">⚡</span> Сегменты
                 </a>
-                
+                <a href="<?= e(url('heatmap.php')) ?>" class="mobile-menu__item">
+                    <span class="mobile-menu__icon">🔥</span> Карта активности
+                </a>
+                <a href="<?= e(url('clubs.php')) ?>" class="mobile-menu__item">
+                    <span class="mobile-menu__icon">🏁</span> Клубы
+                </a>
                 <a href="<?= e(url('activity-create.php')) ?>" class="mobile-menu__item">
-    <span class="mobile-menu__icon">✏️</span> Добавить вручную
-</a>
-                
+                    <span class="mobile-menu__icon">✏️</span> Добавить вручную
+                </a>
                 <a href="<?= e(url('calendar.php')) ?>" class="mobile-menu__item">
-    <span class="mobile-menu__icon">📅</span> Календарь
-</a>
-                
+                    <span class="mobile-menu__icon">📅</span> Календарь
+                </a>
                 <a href="<?= e(url('gear.php')) ?>" class="mobile-menu__item">
                     <span class="mobile-menu__icon">🎒</span> Инвентарь
                 </a>
@@ -216,5 +212,3 @@ if ($me) {
 <?php endif; ?>
 
 <main>
-
-

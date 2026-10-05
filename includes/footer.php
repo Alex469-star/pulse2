@@ -22,5 +22,7 @@
 <?php if (!empty($inlineJs)): ?>
     <script><?= $inlineJs ?></script>
 <?php endif; ?>
+
+<script src="<?= e(url('assets/js/club.js')) ?>" defer></script>
 </body>
 </html>

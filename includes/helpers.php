@@ -394,3 +394,4 @@ function http_request(string $method, string $url, array $options = []): array
         'json'   => is_array($json) ? $json : null,
     ];
 }
+
