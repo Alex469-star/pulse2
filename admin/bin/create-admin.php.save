@@ -1,0 +1,24 @@
+<?php
+declare(strict_types=1);
+
+require_once __DIR__ . '/../../config/database.php';
+
+if (PHP_SAPI !== 'cli') exit('CLI only');
+
+$email    = $argv[1] ?? null;
+$username = $argv[2] ?? null;
+$password = $argv[3] ?? null;
+$role     = $argv[4] ?? 'super';
+
+if (!$email || !$username || !$password) {
+    fwrite(STDERR, "Usage: php create-admin.php <email> <username> <password> [super|moderator|readonly]\n");
+    exit(1);
+}
+
+$hash = password_hash($password, PASSWORD_DEFAULT);
+$stmt = db()->prepare(
+    'INSERT INTO admins (email, username, password_hash, display_name, role)
+     VALUES (?, ?, ?, ?, ?)'
+);
+$stmt->execute([$email, $username, $hash, $username, $role]);
+echo "Created admin #" . db()->lastInsertId() . "\n";
