@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+date_default_timezone_set('Europe/Moscow');
+
 function db(): PDO
 {
     static $pdo = null;
@@ -21,6 +23,9 @@ function db(): PDO
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
         PDO::ATTR_EMULATE_PREPARES   => false,
     ]);
+
+    // Синхронизируем таймзону MySQL с PHP
+    $pdo->exec("SET time_zone = '+03:00'");
 
     return $pdo;
 }
