@@ -1,0 +1,139 @@
+.heatmap-page {
+    max-width: 1280px;
+    margin: 24px auto 60px;
+    padding: 0 24px;
+}
+
+.heatmap-page__head {
+    margin-bottom: 16px;
+}
+
+.heatmap-page__title {
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: -.02em;
+    margin: 0 0 4px;
+}
+
+.heatmap-page__subtitle {
+    margin: 0;
+    font-size: 14px;
+}
+
+/* Тулбар */
+.heatmap-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-bottom: 16px;
+    padding: 12px 16px;
+    background: #fff;
+    border: 1px solid var(--border, #e6e9ef);
+    border-radius: 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.04);
+}
+
+.heatmap-toolbar__group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.heatmap-toolbar__label {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--text-soft, #8a93a3);
+    margin-right: 4px;
+}
+
+.heatmap-tool {
+    padding: 7px 14px;
+    border-radius: 999px;
+    background: var(--bg-soft, #f4f6fa);
+    border: 1px solid transparent;
+    color: var(--text-muted, #5b6473);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: .15s;
+    white-space: nowrap;
+}
+.heatmap-tool:hover {
+    background: #fff;
+    border-color: var(--border-strong, #d4d9e2);
+    color: var(--text, #0f1420);
+}
+.heatmap-tool.is-active {
+    background: #0f1420;
+    color: #fff;
+    border-color: #0f1420;
+}
+
+/* Карта */
+.heatmap-map {
+    width: 100%;
+    height: calc(100vh - 320px);
+    min-height: 500px;
+    border-radius: 18px;
+    overflow: hidden;
+    border: 1px solid var(--border, #e6e9ef);
+    background: #0f1420;
+    z-index: 1;
+}
+
+/* Легенда */
+.heatmap-legend {
+    margin-top: 12px;
+    padding: 20px 16px;
+    background: #fff;
+    border: 1px solid var(--border, #e6e9ef);
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    max-width: 400px;
+}
+
+.heatmap-legend__label {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: var(--text-soft, #8a93a3);
+    white-space: nowrap;
+}
+
+.heatmap-legend__bar {
+    flex: 1;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    height: 8px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #1e3a8a, #0ea5e9, #22c55e, #eab308, #ef4444);
+    padding: 0 4px;
+    position: relative;
+}
+
+.heatmap-legend__bar span {
+    position: absolute;
+    top: 14px;
+    font-size: 11px;
+    color: var(--text-soft, #8a93a3);
+}
+.heatmap-legend__bar span:first-child { left: 0; }
+.heatmap-legend__bar span:last-child  { right: 0; }
+
+/* Мобильные */
+@media (max-width: 640px) {
+    .heatmap-page { padding: 0 12px; margin-top: 12px; }
+    .heatmap-page__title { font-size: 20px; }
+    .heatmap-map { height: 60vh; min-height: 400px; border-radius: 14px; }
+    .heatmap-toolbar { padding: 10px; gap: 10px; }
+    .heatmap-tool { padding: 6px 10px; font-size: 12px; }
+    .heatmap-legend { padding: 20px 12px; }
+}

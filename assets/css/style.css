@@ -27,7 +27,7 @@ button { font-family: inherit; }
 
 body {
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
-    background: var(--bg);
+    background: #f6f7fb;
     color: var(--text);
     line-height: 1.55;
     -webkit-font-smoothing: antialiased;
@@ -8575,4 +8575,660 @@ form button[type="submit"][disabled] {
         font-size: 11px;
         padding: 3px 10px;
     }
+}
+
+/* ============================================================
+   SEGMENT LEADERBOARD TABLE — v4
+   Адаптивная таблица с горизонтальным скроллом на мобильных.
+   Без превращения в карточки, без :has(), без ::before-подписей.
+   ============================================================ */
+
+/* ---- Обёртка ---- */
+.leaderboard-table-wrap {
+    border-radius: 20px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    box-shadow:
+        0 1px 2px rgba(11, 18, 32, .04),
+        0 8px 24px rgba(11, 18, 32, .06);
+    padding: 4px;
+    /* Скрываем, но не режем содержимое */
+    overflow: hidden;
+    /* Скролл появится только на мобильных */
+    -webkit-overflow-scrolling: touch;
+}
+
+/* ---- Таблица ---- */
+.leaderboard-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 14px;
+    table-layout: auto;
+}
+
+/* ---- Шапка ---- */
+.leaderboard-table thead th {
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    color: var(--text-soft);
+
+    padding: 14px 16px 12px;
+    background: transparent;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    user-select: none;
+}
+
+/* Выравнивание заголовков */
+.leaderboard-table thead th.lb-col-rank  { text-align: center; width: 56px; padding-left: 12px; padding-right: 8px; }
+.leaderboard-table thead th.lb-col-name  { text-align: left; }
+.leaderboard-table thead th.lb-col-date  { text-align: left; width: 110px; }
+.leaderboard-table thead th.lb-col-speed { text-align: right; width: 96px; }
+.leaderboard-table thead th.lb-col-hr    { text-align: right; width: 90px; }
+.leaderboard-table thead th.lb-col-pwr   { text-align: right; width: 96px; }
+.leaderboard-table thead th.lb-col-time  { text-align: right; width: 92px; padding-right: 20px; }
+
+/* ---- Тело ---- */
+.leaderboard-table tbody td {
+    padding: 14px 16px;
+    vertical-align: middle;
+    white-space: nowrap;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+    transition: background .15s ease;
+    background: transparent;
+}
+
+.leaderboard-table tbody tr:last-child td { border-bottom: none; }
+
+/* Строки */
+.leaderboard-table tbody tr {
+    cursor: pointer;
+    transition: background .15s ease;
+}
+.leaderboard-table tbody tr:hover td {
+    background: color-mix(in srgb, var(--bg-soft) 55%, transparent);
+}
+
+/* ============================================================
+   ТОП-3 — мягкая подсветка + левая полоска
+   ============================================================ */
+.leaderboard-table tbody tr.is-gold td:first-child   { box-shadow: inset 3px 0 0 #d4a017; border-radius: 12px 0 0 12px; }
+.leaderboard-table tbody tr.is-silver td:first-child { box-shadow: inset 3px 0 0 #a4a4a4; border-radius: 12px 0 0 12px; }
+.leaderboard-table tbody tr.is-bronze td:first-child { box-shadow: inset 3px 0 0 #b87333; border-radius: 12px 0 0 12px; }
+
+.leaderboard-table tbody tr.is-gold td {
+    background: color-mix(in srgb, #d4a017 4%, var(--bg-card));
+}
+.leaderboard-table tbody tr.is-gold:hover td {
+    background: color-mix(in srgb, #d4a017 8%, var(--bg-card));
+}
+
+/* Замыкаем скругление справа */
+.leaderboard-table tbody tr.is-gold td:last-child,
+.leaderboard-table tbody tr.is-silver td:last-child,
+.leaderboard-table tbody tr.is-bronze td:last-child { border-radius: 0 12px 12px 0; }
+
+/* ---- Моя строка ---- */
+.leaderboard-table__row.is-me td {
+    background: color-mix(in srgb, var(--accent, #e94f2e) 5%, var(--bg-card));
+}
+.leaderboard-table__row.is-me:hover td {
+    background: color-mix(in srgb, var(--accent, #e94f2e) 9%, var(--bg-card));
+}
+.leaderboard-table__row.is-me td:first-child {
+    box-shadow: inset 3px 0 0 var(--accent, #e94f2e);
+    border-radius: 12px 0 0 12px;
+}
+.leaderboard-table__row.is-me td:last-child { border-radius: 0 12px 12px 0; }
+
+/* ============================================================
+   КОЛОНКА «МЕСТО»
+   ============================================================ */
+.lb-col-rank { text-align: center; }
+
+.lb-rank {
+    display: inline-grid;
+    place-items: center;
+    min-width: 28px;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 10px;
+
+    background: var(--bg-soft);
+    color: var(--text-muted);
+
+    font-weight: 700;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    transition: background .15s ease, color .15s ease;
+}
+
+.leaderboard-table__row.is-gold .lb-rank {
+    background: color-mix(in srgb, #d4a017 16%, var(--bg-soft));
+    color: #8b6500;
+    font-weight: 800;
+}
+.leaderboard-table__row.is-silver .lb-rank {
+    background: color-mix(in srgb, #a4a4a4 18%, var(--bg-soft));
+    color: #555;
+    font-weight: 800;
+}
+.leaderboard-table__row.is-bronze .lb-rank {
+    background: color-mix(in srgb, #b87333 18%, var(--bg-soft));
+    color: #6e4419;
+    font-weight: 800;
+}
+
+/* ============================================================
+   КОЛОНКА «ИМЯ»
+   ============================================================ */
+.lb-col-name { min-width: 0; }
+
+.lb-user {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    color: inherit;
+    text-decoration: none;
+    min-width: 0;
+    max-width: 100%;
+}
+
+.lb-user .avatar {
+    flex-shrink: 0;
+    box-shadow: 0 1px 2px rgba(11, 18, 32, .08);
+}
+
+.lb-user__name {
+    font-weight: 600;
+    font-size: 14px;
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--text);
+    transition: color .15s ease;
+}
+
+.lb-user:hover .lb-user__name { color: var(--accent, #e94f2e); }
+
+/* Бейдж «вы» */
+.leaderboard__you {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--accent, #e94f2e);
+    background: color-mix(in srgb, var(--accent, #e94f2e) 12%, transparent);
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-left: 8px;
+    vertical-align: middle;
+}
+
+/* ============================================================
+   КОЛОНКА «ДАТА»
+   ============================================================ */
+.lb-col-date {
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+/* ============================================================
+   ЧИСЛОВЫЕ КОЛОНКИ
+   ============================================================ */
+.lb-col-speed,
+.lb-col-hr,
+.lb-col-pwr,
+.lb-col-time {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.lb-col-speed,
+.lb-col-hr,
+.lb-col-pwr {
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--text);
+}
+
+.lb-col-speed small,
+.lb-col-hr small,
+.lb-col-pwr small {
+    color: var(--text-soft);
+    font-size: 11px;
+    font-weight: 500;
+    margin-left: 3px;
+}
+
+.leaderboard-table tbody td .muted {
+    color: var(--text-soft);
+    font-weight: 400;
+    font-size: 13px;
+}
+
+/* ============================================================
+   КОЛОНКА «ВРЕМЯ»
+   ============================================================ */
+.lb-col-time { font-size: 15px; font-weight: 700; }
+
+.lb-time {
+    display: inline-block;
+    color: var(--text);
+    text-decoration: none;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.01em;
+    padding: 4px 10px;
+    margin: -4px -10px;
+    border-radius: 8px;
+    transition: background .15s ease, color .15s ease;
+}
+.leaderboard-table__row.is-gold .lb-time { color: #8b6500; }
+
+.lb-time:hover {
+    background: color-mix(in srgb, var(--accent, #e94f2e) 10%, transparent);
+    color: var(--accent, #e94f2e);
+}
+
+/* ============================================================
+   ТЁМНАЯ ТЕМА
+   ============================================================ */
+@media (prefers-color-scheme: dark) {
+    .leaderboard-table-wrap {
+        box-shadow:
+            0 1px 2px rgba(0, 0, 0, .35),
+            0 8px 24px rgba(0, 0, 0, .35);
+    }
+
+    .leaderboard-table tbody tr:hover td {
+        background: color-mix(in srgb, var(--bg-soft) 45%, transparent);
+    }
+
+    .leaderboard-table tbody tr.is-gold td {
+        background: color-mix(in srgb, #d4a017 8%, var(--bg-card));
+    }
+
+    .leaderboard-table__row.is-gold .lb-rank { color: #ffd166; }
+    .leaderboard-table__row.is-silver .lb-rank { color: #cccccc; }
+    .leaderboard-table__row.is-bronze .lb-rank { color: #e29b5f; }
+
+    .leaderboard-table__row.is-gold .lb-time { color: #ffd166; }
+}
+
+/* ============================================================
+   АДАПТИВ
+   ============================================================ */
+
+/* Планшет: чуть плотнее паддинги */
+@media (max-width: 900px) {
+    .leaderboard-table thead th,
+    .leaderboard-table tbody td {
+        padding: 12px 12px;
+    }
+    .lb-user__name { font-size: 13.5px; }
+}
+
+/* Небольшие планшеты: скрываем самую необязательную колонку — дату */
+@media (max-width: 720px) {
+    .leaderboard-table thead th.lb-col-date,
+    .leaderboard-table tbody td.lb-col-date {
+        display: none;
+    }
+}
+
+/* ============================================================
+   МОБИЛЬНЫЕ: горизонтальный скролл таблицы
+   ============================================================ */
+@media (max-width: 560px) {
+
+    /* Обёртка — окно со скроллом */
+    .leaderboard-table-wrap {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        box-shadow:
+            0 1px 2px rgba(11, 18, 32, .04),
+            0 6px 18px rgba(11, 18, 32, .06);
+        padding: 0;
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: thin;
+    }
+
+    /* Тонкий скроллбар */
+    .leaderboard-table-wrap::-webkit-scrollbar {
+        height: 6px;
+    }
+    .leaderboard-table-wrap::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    .leaderboard-table-wrap::-webkit-scrollbar-thumb {
+        background: var(--border-strong);
+        border-radius: 999px;
+    }
+
+    /* Таблица — с min-width, чтобы появился скролл */
+    .leaderboard-table {
+        display: table;
+        width: 100%;
+        min-width: 680px;
+        table-layout: auto;
+        font-size: 13px;
+    }
+
+    /* Компактные паддинги */
+    .leaderboard-table thead th,
+    .leaderboard-table tbody td {
+        padding: 10px 12px;
+        white-space: nowrap;
+    }
+
+    /* Возвращаем дату, раз есть скролл */
+    .leaderboard-table thead th.lb-col-date,
+    .leaderboard-table tbody td.lb-col-date {
+        display: table-cell;
+    }
+
+    /* Минимальные ширины колонок */
+    .leaderboard-table thead th.lb-col-rank,
+    .leaderboard-table tbody td.lb-col-rank {
+        min-width: 52px;
+        width: 52px;
+        text-align: center;
+    }
+    .leaderboard-table thead th.lb-col-name,
+    .leaderboard-table tbody td.lb-col-name {
+        min-width: 170px;
+    }
+    .leaderboard-table thead th.lb-col-date,
+    .leaderboard-table tbody td.lb-col-date {
+        min-width: 90px;
+    }
+    .leaderboard-table thead th.lb-col-speed,
+    .leaderboard-table tbody td.lb-col-speed {
+        min-width: 82px;
+    }
+    .leaderboard-table thead th.lb-col-hr,
+    .leaderboard-table tbody td.lb-col-hr {
+        min-width: 76px;
+    }
+    .leaderboard-table thead th.lb-col-pwr,
+    .leaderboard-table tbody td.lb-col-pwr {
+        min-width: 82px;
+    }
+    .leaderboard-table thead th.lb-col-time,
+    .leaderboard-table tbody td.lb-col-time {
+        min-width: 76px;
+        padding-right: 14px;
+    }
+
+    /* Аватар компактнее */
+    .lb-user .avatar {
+        width: 28px;
+        height: 28px;
+        font-size: 12px;
+    }
+
+    /* Имя обрезаем */
+    .lb-user__name {
+        font-size: 13.5px;
+        max-width: 140px;
+    }
+
+    /* Место компактнее */
+    .lb-rank {
+        min-width: 26px;
+        height: 26px;
+        font-size: 12px;
+        border-radius: 8px;
+    }
+    .leaderboard-table__row.is-gold .lb-rank,
+    .leaderboard-table__row.is-silver .lb-rank,
+    .leaderboard-table__row.is-bronze .lb-rank {
+        font-size: 13px;
+    }
+
+    /* Время */
+    .lb-col-time { font-size: 14px; font-weight: 700; }
+    .lb-time {
+        font-size: 14px;
+        padding: 2px 6px;
+        margin: -2px -6px;
+    }
+
+    /* Единицы измерения мельче */
+    .lb-col-speed small,
+    .lb-col-hr small,
+    .lb-col-pwr small {
+        font-size: 10px;
+        margin-left: 2px;
+    }
+
+    /* Числовые значения компактнее */
+    .lb-col-speed,
+    .lb-col-hr,
+    .lb-col-pwr {
+        font-size: 12.5px;
+    }
+
+    /* Дата компактнее */
+    .lb-col-date {
+        font-size: 12px;
+    }
+
+    /* Бейдж «вы» компактнее */
+    .leaderboard__you {
+        font-size: 9px;
+        padding: 1px 5px;
+        margin-left: 5px;
+    }
+
+    /* Ховер отключаем — на тач-устройствах он только мешает */
+    .leaderboard-table tbody tr:hover td {
+        background: transparent;
+    }
+    .leaderboard-table tbody tr.is-gold:hover td {
+        background: color-mix(in srgb, #d4a017 4%, var(--bg-card));
+    }
+    .leaderboard-table__row.is-me:hover td {
+        background: color-mix(in srgb, var(--accent, #e94f2e) 5%, var(--bg-card));
+    }
+}
+
+/* ============================================================
+   ОЧЕНЬ УЗКИЕ ЭКРАНЫ
+   ============================================================ */
+@media (max-width: 400px) {
+    .leaderboard-table thead th,
+    .leaderboard-table tbody td {
+        padding: 9px 10px;
+    }
+
+    .leaderboard-table {
+        min-width: 620px;
+    }
+
+    .leaderboard-table thead th.lb-col-rank,
+    .leaderboard-table tbody td.lb-col-rank {
+        min-width: 46px;
+        width: 46px;
+    }
+    .leaderboard-table thead th.lb-col-name,
+    .leaderboard-table tbody td.lb-col-name {
+        min-width: 150px;
+    }
+    .leaderboard-table thead th.lb-col-date,
+    .leaderboard-table tbody td.lb-col-date {
+        min-width: 84px;
+    }
+    .leaderboard-table thead th.lb-col-speed,
+    .leaderboard-table tbody td.lb-col-speed {
+        min-width: 76px;
+    }
+    .leaderboard-table thead th.lb-col-hr,
+    .leaderboard-table tbody td.lb-col-hr {
+        min-width: 70px;
+    }
+    .leaderboard-table thead th.lb-col-pwr,
+    .leaderboard-table tbody td.lb-col-pwr {
+        min-width: 76px;
+    }
+    .leaderboard-table thead th.lb-col-time,
+    .leaderboard-table tbody td.lb-col-time {
+        min-width: 70px;
+    }
+
+    .lb-user .avatar {
+        width: 26px;
+        height: 26px;
+        font-size: 11px;
+    }
+    .lb-user__name {
+        font-size: 13px;
+        max-width: 120px;
+    }
+    .lb-rank {
+        min-width: 24px;
+        height: 24px;
+        font-size: 11px;
+    }
+    .lb-col-time,
+    .lb-time { font-size: 13px; }
+    .lb-col-speed,
+    .lb-col-hr,
+    .lb-col-pwr { font-size: 12px; }
+    .lb-col-speed small,
+    .lb-col-hr small,
+    .lb-col-pwr small { font-size: 9px; }
+}
+
+/* ============================================================
+   ПРЕДПОЧТЕНИЯ
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+    .leaderboard-table tbody tr,
+    .leaderboard-table tbody td,
+    .lb-user__name,
+    .lb-time {
+        transition: none;
+    }
+}
+
+/* ============ SIDEBAR — МОИ КЛУБЫ ============ */
+.sidebar-card--clubs { padding: 16px 14px; }
+
+.sidebar-card__title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.sidebar-card__count {
+    display: inline-grid;
+    place-items: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 800;
+    margin-left: auto;
+}
+
+.sidebar-clubs {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.sidebar-club {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 8px;
+    border-radius: 10px;
+    color: inherit;
+    text-decoration: none;
+    transition: background .15s;
+    min-width: 0;
+}
+.sidebar-club:hover {
+    background: var(--bg-soft);
+}
+
+.sidebar-club__avatar {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #fff;
+    font-weight: 700;
+    font-size: 13px;
+    flex-shrink: 0;
+    overflow: hidden;
+}
+.sidebar-club__avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.sidebar-club__info {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+}
+.sidebar-club__name {
+    font-size: 13.5px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.sidebar-club__meta {
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.sidebar-clubs__empty {
+    font-size: 13px;
+    line-height: 1.5;
+    margin: 6px 0 10px;
+}
+.sidebar-clubs__cta,
+.sidebar-clubs__more {
+    display: inline-block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--accent);
+    text-decoration: none;
+    padding: 4px 6px;
+    border-radius: 6px;
+    transition: background .15s;
+}
+.sidebar-clubs__cta:hover,
+.sidebar-clubs__more:hover {
+    background: var(--accent-soft);
+}
+.sidebar-clubs__more {
+    margin-top: 4px;
+    font-size: 12.5px;
 }
