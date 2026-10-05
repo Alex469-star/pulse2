@@ -281,16 +281,18 @@ if (!empty($activity['gear_id'])) {
 
 // ============================================================
 // РАНГИ И СТАТИСТИКА ПО СЕГМЕНТАМ
+// ВАЖНО: данные привязаны к ВЛАДЕЛЬЦУ активности, а не к текущему зрителю.
 // ============================================================
 $segmentRanks = [];
 $segmentStats = [];
 $segmentBestTimes = [];
 
-if ($segments && $me) {
+if ($segments) {
     $segmentIds = array_map(function ($s) { return (int)$s['segment_id']; }, $segments);
+    $ownerId = (int)$activity['user_id'];
 
     try {
-        $segmentRanks = Segment::userRanksForSegments($segmentIds, (int)$me['id']);
+        $segmentRanks = Segment::userRanksForSegments($segmentIds, $ownerId);
     } catch (Throwable $e) {
         $segmentRanks = [];
     }
@@ -1177,32 +1179,32 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
                 <div class="segment-rows">
                     <?php foreach ($segments as $s): ?>
                         <?php
-                            $segId     = (int)$s['segment_id'];
-                            $myRank    = $segmentRanks[$segId] ?? null;
-                            $segStat   = $segmentStats[$segId] ?? ['efforts' => 0, 'athletes' => 0];
-                            $bestTime  = $segmentBestTimes[$segId] ?? null;
-                            $myTime    = (int)$s['elapsed_time_sec'];
-                            $isLeader  = ($myRank === 1);
+                            $segId         = (int)$s['segment_id'];
+                            $ownerRank     = $segmentRanks[$segId] ?? null;   // ранг владельца активности
+                            $segStat       = $segmentStats[$segId] ?? ['efforts' => 0, 'athletes' => 0];
+                            $bestTime      = $segmentBestTimes[$segId] ?? null;
+                            $ownerTime     = (int)$s['elapsed_time_sec'];     // время владельца на сегменте
+                            $ownerIsLeader = ($ownerRank === 1);
 
                             $gapSec = null;
-                            if (!$isLeader && $bestTime !== null && $myTime > $bestTime) {
-                                $gapSec = $myTime - $bestTime;
+                            if (!$ownerIsLeader && $bestTime !== null && $ownerTime > $bestTime) {
+                                $gapSec = $ownerTime - $bestTime;
                             }
                             $gapText = format_gap_from_leader($gapSec);
 
                             $segmentDistanceM = (float)$s['distance_m'];
-                            $avgSpeedMps = ($segmentDistanceM > 0 && $myTime > 0)
-                                ? $segmentDistanceM / $myTime
+                            $avgSpeedMps = ($segmentDistanceM > 0 && $ownerTime > 0)
+                                ? $segmentDistanceM / $ownerTime
                                 : null;
                             $avgSpeedKmh = $avgSpeedMps !== null ? $avgSpeedMps * 3.6 : null;
                         ?>
-                        <a class="segment-row <?= $isLeader ? 'segment-row--leader' : '' ?>"
+                        <a class="segment-row <?= $ownerIsLeader ? 'segment-row--leader' : '' ?>"
                            href="<?= e(url('segment.php?id=' . $segId)) ?>">
                             <div class="segment-row__body">
                                 <div class="segment-row__name">
                                     <strong><?= e($s['name']) ?></strong>
-                                    <?php if ($isLeader): ?>
-                                        <span class="segment-row__crown" title="Вы лидер этого сегмента">👑</span>
+                                    <?php if ($ownerIsLeader): ?>
+                                        <span class="segment-row__crown" title="Лидер этого сегмента">👑</span>
                                     <?php endif; ?>
                                     <?php if (!empty($s['is_auto'])): ?>
                                         <span class="segment-row__badge">авто</span>
@@ -1213,21 +1215,21 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
                                     <?php if (!empty($s['match_quality'])): ?>
                                         · совпадение <?= (int)$s['match_quality'] ?>%
                                     <?php endif; ?>
-                                    <?php if ($myRank !== null): ?>
-                                        · <?= $isLeader ? '🥇 1-е место' : ($myRank === 2 ? '🥈 2-е место' : ($myRank === 3 ? '🥉 3-е место' : 'позиция #' . $myRank)) ?>
+                                    <?php if ($ownerRank !== null): ?>
+                                        · <?= $ownerIsLeader ? '🥇 1-е место' : ($ownerRank === 2 ? '🥈 2-е место' : ($ownerRank === 3 ? '🥉 3-е место' : 'позиция #' . $ownerRank)) ?>
                                         из <?= (int)$segStat['athletes'] ?>
                                     <?php endif; ?>
                                 </div>
 
                                 <?php if ($gapText !== ''): ?>
-                                    <div class="segment-row__gap" title="Отставание от первого места">
+                                    <div class="segment-row__gap" title="Отставание владельца от первого места">
                                         <?= e($gapText) ?> до 1-го места
                                     </div>
                                 <?php endif; ?>
                             </div>
 
                             <div class="segment-row__metrics">
-                                <div class="segment-row__time"><?= e(format_elapsed($myTime)) ?></div>
+                                <div class="segment-row__time"><?= e(format_elapsed($ownerTime)) ?></div>
                                 <?php if ($avgSpeedKmh !== null): ?>
                                     <div class="segment-row__speed"><?= number_format($avgSpeedKmh, 1, '.', '') ?> км/ч</div>
                                 <?php endif; ?>

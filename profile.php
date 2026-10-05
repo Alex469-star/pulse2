@@ -766,6 +766,60 @@ function activity_label(string $type): string
                 <span class="profile-numbers__label">Подписок</span>
             </a>
         </div>
+        
+        <!-- ============ КЛУБЫ ПОЛЬЗОВАТЕЛЯ ============ -->
+<?php
+    $userClubs = [];
+    try {
+        $s = db()->prepare(
+            'SELECT c.id, c.name, c.slug, c.avatar_url, c.member_count,
+                    m.role, m.joined_at
+               FROM club_members m
+               JOIN clubs c ON c.id = m.club_id
+              WHERE m.user_id = ? AND m.status = "active" AND c.is_banned = 0
+           ORDER BY FIELD(m.role, "owner","admin","moderator","member"), m.joined_at ASC
+              LIMIT 30'
+        );
+        $s->execute([(int)$user['id']]);
+        $userClubs = $s->fetchAll();
+    } catch (Throwable $e) {
+        $userClubs = [];
+    }
+?>
+
+<?php if ($userClubs): ?>
+    <section class="profile-section">
+        <div class="profile-section__head">
+            <h2 class="profile-section__title">
+                Клубы
+                <span class="profile-section__count"><?= count($userClubs) ?></span>
+            </h2>
+        </div>
+        <div class="profile-clubs">
+            <?php foreach ($userClubs as $uc): ?>
+                <a class="profile-club-chip"
+                   href="<?= e(url('club.php?slug=' . urlencode((string)$uc['slug']))) ?>">
+                    <span class="profile-club-chip__avatar">
+                        <?php if (!empty($uc['avatar_url'])): ?>
+                            <img src="<?= e($uc['avatar_url']) ?>" alt="">
+                        <?php else: ?>
+                            <?= e(mb_substr((string)$uc['name'], 0, 1)) ?>
+                        <?php endif; ?>
+                    </span>
+                    <span class="profile-club-chip__info">
+                        <span class="profile-club-chip__name"><?= e($uc['name']) ?></span>
+                        <span class="profile-club-chip__meta muted">
+                            <?= (int)$uc['member_count'] ?> участников
+                            <?php if ($uc['role'] === 'owner'): ?> · владелец<?php endif; ?>
+                            <?php if ($uc['role'] === 'admin'): ?> · админ<?php endif; ?>
+                            <?php if ($uc['role'] === 'moderator'): ?> · модератор<?php endif; ?>
+                        </span>
+                    </span>
+                </a>
+            <?php endforeach; ?>
+        </div>
+    </section>
+<?php endif; ?>
 
         <!-- ============ ПОДПИСЧИКИ И ПОДПИСКИ ============ -->
         <?php if ($followers || $following): ?>

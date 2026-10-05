@@ -49,7 +49,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $lat = (float)$p['lat'];
             $lng = (float)$p['lng'];
             if ($lat < -90 || $lat > 90 || $lng < -180 || $lng > 180) continue;
-            $clean[] = ['lat' => $lat, 'lng' => $lng];
+            $row = ['lat' => $lat, 'lng' => $lng];
+            if (isset($p['ele'])) $row['ele'] = (float)$p['ele'];
+            $clean[] = $row;
         }
         if (count($clean) < 2) {
             $errors['track'] = 'Недостаточно корректных точек';
@@ -61,7 +63,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $waypointsRaw = (string)($_POST['waypoints_json'] ?? '[]');
     $waypoints = json_decode($waypointsRaw, true);
     if (!is_array($waypoints)) $waypoints = [];
-    $waypoints = array_slice($waypoints, 0, 50);
+    $waypoints = array_slice($waypoints, 0, 100);
 
     $cleanWaypoints = [];
     foreach ($waypoints as $w) {
@@ -123,407 +125,331 @@ $pageTitle = 'Новый маршрут';
 
 $extraCss = [
     'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
+    url('assets/css/route-editor.css'),
 ];
 
-$extraJs = [
-    'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
-];
+$extraJs = [];
 
-$inlineJs = <<<'JS'
-(function () {
-    if (typeof L === "undefined") {
-        console.error("Leaflet не загрузился");
-        return;
-    }
-
-    var map = L.map("route-map", {
-        zoomControl: true,
-        scrollWheelZoom: true
-    }).setView([55.751244, 37.618423], 11);
-
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        maxZoom: 19,
-        attribution: "&copy; OpenStreetMap"
-    }).addTo(map);
-
-    // ---- Состояние ----
-    var controlPoints = [];
-    var routeLine = null;
-    var controlMarkers = [];
-    var noteMarkers = [];
-    var snappedTrack = [];
-
-    var infoPointsEl = document.getElementById("info-points");
-    var infoLengthEl = document.getElementById("info-length");
-    var infoStatusEl = document.getElementById("info-status");
-    var infoEl = document.getElementById("route-info");
-
-    // ---- Haversine ----
-    function haversine(a, b) {
-        var R = 6371000;
-        var dLat = (b.lat - a.lat) * Math.PI / 180;
-        var dLng = (b.lng - a.lng) * Math.PI / 180;
-        var lat1 = a.lat * Math.PI / 180;
-        var lat2 = b.lat * Math.PI / 180;
-        var h = Math.sin(dLat/2)**2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng/2)**2;
-        return 2 * R * Math.asin(Math.sqrt(h));
-    }
-
-    function totalLength(pts) {
-        var d = 0;
-        for (var i = 1; i < pts.length; i++) d += haversine(pts[i-1], pts[i]);
-        return d;
-    }
-
-    function fmtMeters(m) {
-        if (m < 1000) return Math.round(m) + " м";
-        return (m / 1000).toFixed(2) + " км";
-    }
-
-    function updateInfo() {
-        if (!snappedTrack.length) {
-            infoPointsEl.textContent = "0";
-            infoLengthEl.textContent = "0 м";
-            infoStatusEl.textContent = "Кликните по карте, чтобы добавить точку";
-            return;
-        }
-        infoPointsEl.textContent = snappedTrack.length;
-        infoLengthEl.textContent = fmtMeters(totalLength(snappedTrack));
-        infoStatusEl.textContent = "Готово";
-    }
-
-    // ---- OSRM ----
-    function fetchRoute() {
-        if (controlPoints.length < 2) {
-            if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
-            snappedTrack = controlPoints.slice();
-            updateInfo();
-            return;
-        }
-
-        infoStatusEl.textContent = "Прокладываем маршрут…";
-
-        var coords = controlPoints.map(function (p) {
-            return p.lng + "," + p.lat;
-        }).join(";");
-
-        var url = "https://router.project-osrm.org/route/v1/driving/" + coords +
-                  "?overview=full&geometries=geojson&steps=false";
-
-        fetch(url)
-            .then(function (r) { return r.json(); })
-            .then(function (data) {
-                if (!data.routes || !data.routes.length) {
-                    throw new Error("Маршрут не найден");
-                }
-                var route = data.routes[0];
-                var coordsArr = route.geometry.coordinates;
-
-                snappedTrack = coordsArr.map(function (c) {
-                    return { lat: +c[1].toFixed(6), lng: +c[0].toFixed(6) };
-                });
-
-                if (routeLine) map.removeLayer(routeLine);
-                routeLine = L.polyline(
-                    snappedTrack.map(function (p) { return [p.lat, p.lng]; }),
-                    { color: "#ff5a1f", weight: 5, opacity: 0.95 }
-                ).addTo(map);
-
-                updateInfo();
-            })
-            .catch(function (err) {
-                console.error("OSRM:", err);
-                infoStatusEl.textContent = "Ошибка: " + err.message;
-            });
-    }
-
-    // ---- Маркеры ----
-    function redrawControlMarkers() {
-        controlMarkers.forEach(function (m) { map.removeLayer(m); });
-        controlMarkers = [];
-
-        controlPoints.forEach(function (pt, idx) {
-            var isStart = idx === 0;
-            var isEnd   = idx === controlPoints.length - 1 && controlPoints.length > 1;
-            var color   = isStart ? "#0a7a3a" : isEnd ? "#b3261e" : "#ff5a1f";
-
-            var marker = L.circleMarker([pt.lat, pt.lng], {
-                radius: 8, color: color, fillColor: color, fillOpacity: 1, weight: 2
-            }).addTo(map);
-
-            marker.bindTooltip("Точка " + (idx + 1), { direction: "top" });
-
-            marker.on("click", function (e) {
-                L.DomEvent.stopPropagation(e);
-                if (!confirm("Удалить точку " + (idx + 1) + "?")) return;
-                controlPoints.splice(idx, 1);
-                redrawControlMarkers();
-                fetchRoute();
-            });
-
-            controlMarkers.push(marker);
-        });
-    }
-
-    // ---- Клик по карте ----
-    map.on("click", function (e) {
-        if (window.__ADDING_NOTE__) return;
-        controlPoints.push({
-            lat: +e.latlng.lat.toFixed(6),
-            lng: +e.latlng.lng.toFixed(6)
-        });
-        redrawControlMarkers();
-        fetchRoute();
-    });
-
-    // ---- Метки ----
-    function escapeHtml(s) {
-        return String(s)
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;")
-            .replace(/'/g, "&#39;");
-    }
-
-    function addNoteMarker(lat, lng, name, note) {
-        var marker = L.marker([lat, lng], {
-            icon: L.divIcon({
-                className: "note-marker",
-                html: "📍",
-                iconSize: [24, 24],
-                iconAnchor: [12, 22]
-            })
-        }).addTo(map);
-
-        var popupHtml = "<strong>" + escapeHtml(name || "Точка") + "</strong>";
-        if (note) popupHtml += "<br>" + escapeHtml(note);
-        marker.bindPopup(popupHtml);
-
-        marker._meta = { lat: lat, lng: lng, name: name || "", note: note || "" };
-        noteMarkers.push(marker);
-        return marker;
-    }
-
-    // ---- UI ----
-    var addNoteBtn = document.getElementById("btn-add-note");
-    var undoBtn = document.getElementById("btn-undo");
-    var clearBtn = document.getElementById("btn-clear");
-    var saveBtn = document.getElementById("btn-save");
-
-    var noteModal = document.getElementById("note-modal");
-    var noteForm = document.getElementById("note-form");
-    var noteLatEl = document.getElementById("note-lat");
-    var noteLngEl = document.getElementById("note-lng");
-    var noteNameEl = document.getElementById("note-name");
-    var noteTextEl = document.getElementById("note-text");
-
-    var saveModal = document.getElementById("save-modal");
-    var routeForm = document.getElementById("route-form");
-    var trackJsonEl = document.getElementById("track_json");
-    var waypointsJsonEl = document.getElementById("waypoints_json");
-
-    var pendingNote = null;
-
-    addNoteBtn.addEventListener("click", function () {
-        if (window.__ADDING_NOTE__) {
-            window.__ADDING_NOTE__ = false;
-            addNoteBtn.classList.remove("is-active");
-            addNoteBtn.textContent = "📍 Метка";
-            map.getContainer().style.cursor = "";
-            return;
-        }
-        window.__ADDING_NOTE__ = true;
-        addNoteBtn.classList.add("is-active");
-        addNoteBtn.textContent = "✕ Отменить";
-        map.getContainer().style.cursor = "crosshair";
-        infoStatusEl.textContent = "Кликните по карте, чтобы поставить метку";
-    });
-
-    map.on("click", function (e) {
-        if (!window.__ADDING_NOTE__) return;
-
-        pendingNote = {
-            lat: +e.latlng.lat.toFixed(6),
-            lng: +e.latlng.lng.toFixed(6)
-        };
-
-        noteLatEl.value = pendingNote.lat;
-        noteLngEl.value = pendingNote.lng;
-        noteNameEl.value = "";
-        noteTextEl.value = "";
-
-        noteModal.hidden = false;
-        noteNameEl.focus();
-
-        window.__ADDING_NOTE__ = false;
-        addNoteBtn.classList.remove("is-active");
-        addNoteBtn.textContent = "📍 Метка";
-        map.getContainer().style.cursor = "";
-    });
-
-    document.getElementById("note-save").addEventListener("click", function (ev) {
-        ev.preventDefault();
-        if (!pendingNote) return;
-
-        var name = noteNameEl.value.trim();
-        var note = noteTextEl.value.trim();
-        if (!name && !note) {
-            alert("Введите название или описание");
-            return;
-        }
-
-        addNoteMarker(pendingNote.lat, pendingNote.lng, name, note);
-        pendingNote = null;
-        noteModal.hidden = true;
-        serializeWaypoints();
-        infoStatusEl.textContent = "Метка добавлена";
-    });
-
-    document.getElementById("note-cancel").addEventListener("click", function (ev) {
-        ev.preventDefault();
-        pendingNote = null;
-        noteModal.hidden = true;
-    });
-
-    undoBtn.addEventListener("click", function () {
-        if (!controlPoints.length) return;
-        controlPoints.pop();
-        redrawControlMarkers();
-        fetchRoute();
-    });
-
-    clearBtn.addEventListener("click", function () {
-        if (!confirm("Удалить все точки и метки?")) return;
-        controlPoints = [];
-        redrawControlMarkers();
-
-        if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
-        snappedTrack = [];
-
-        noteMarkers.forEach(function (m) { map.removeLayer(m); });
-        noteMarkers = [];
-
-        updateInfo();
-        serializeWaypoints();
-    });
-
-    function serializeWaypoints() {
-        var arr = noteMarkers.map(function (m) {
-            return {
-                lat:  m._meta.lat,
-                lng:  m._meta.lng,
-                name: m._meta.name,
-                note: m._meta.note
-            };
-        });
-        waypointsJsonEl.value = JSON.stringify(arr);
-    }
-
-    // ---- Модальное окно сохранения ----
-    saveBtn.addEventListener("click", function () {
-        if (snappedTrack.length < 2) {
-            alert("Проложите маршрут — нужно минимум 2 точки");
-            return;
-        }
-        trackJsonEl.value = JSON.stringify(snappedTrack);
-        serializeWaypoints();
-        saveModal.hidden = false;
-        document.getElementById("route-name").focus();
-    });
-
-    document.getElementById("save-cancel").addEventListener("click", function (ev) {
-        ev.preventDefault();
-        saveModal.hidden = true;
-    });
-
-    // Закрытие по клику на фон
-    [noteModal, saveModal].forEach(function (modal) {
-        modal.addEventListener("click", function (e) {
-            if (e.target === modal) modal.hidden = true;
-        });
-    });
-
-    // Escape закрывает
-    document.addEventListener("keydown", function (e) {
-        if (e.key !== "Escape") return;
-        if (!noteModal.hidden) noteModal.hidden = true;
-        if (!saveModal.hidden) saveModal.hidden = true;
-    });
-
-    // ---- Начальное состояние ----
-    updateInfo();
-})();
-JS;
+$bodyClass = 'route-create-page';
 
 require __DIR__ . '/includes/header.php';
 ?>
 
-<!-- ============================================================
-     КАРТА НА ВЕСЬ ЭКРАН
-     ============================================================ -->
-<div class="route-map-full" id="route-map"></div>
+<!-- ПРАВИМ ЛЕЙАУТ: хедер виден, карта в main -->
+<style>
+body.route-create-page {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+    margin: 0;
+}
+body.route-create-page .site-header {
+    display: block !important;
+    position: relative !important;
+    top: auto !important;
+    flex-shrink: 0;
+    z-index: 100;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    background: #fff !important;
+    box-shadow: none !important;
+    border-bottom: 1px solid #e3e7ef;
+}
+body.route-create-page .site-footer { display: none !important; }
+body.route-create-page main {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: hidden;
+}
+body.route-create-page .route-map-full {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+}
+</style>
 
-<!-- ============================================================
-     ЛЕВАЯ ИНФО-ПАНЕЛЬ
-     ============================================================ -->
-<div class="route-hud" id="route-info">
-    <div class="route-hud__row">
-        <span class="route-hud__label">Точек трека</span>
-        <span class="route-hud__value" id="info-points">0</span>
+<!-- КАРТА -->
+<div id="route-map" class="route-map-full"></div>
+
+<!-- ВЕРХНИЙ ТУЛБАР -->
+<div class="route-topbar">
+    <div class="route-topbar__group">
+        <button type="button" class="route-icon-btn" id="btn-undo" title="Отменить (Ctrl+Z)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
+                <path d="M3 7v6h6"/>
+                <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.36 2.64L3 13"/>
+            </svg>
+        </button>
+        <button type="button" class="route-icon-btn" id="btn-redo" title="Повторить (Ctrl+Y)" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
+                <path d="M21 7v6h-6"/>
+                <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6.36 2.64L21 13"/>
+            </svg>
+        </button>
+        <button type="button" class="route-icon-btn" id="btn-reverse" title="Развернуть маршрут">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
+                <path d="M17 1l4 4-4 4"/>
+                <path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+                <path d="M7 23l-4-4 4-4"/>
+                <path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+            </svg>
+        </button>
+        <button type="button" class="route-icon-btn" id="btn-fit" title="Показать весь маршрут">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
+                <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
+                <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+                <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
+                <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+            </svg>
+        </button>
+        <button type="button" class="route-icon-btn route-icon-btn--danger" id="btn-clear-all" title="Очистить карту">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                <path d="M10 11v6"/>
+                <path d="M14 11v6"/>
+                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+            </svg>
+        </button>
     </div>
-    <div class="route-hud__row">
-        <span class="route-hud__label">Длина</span>
-        <span class="route-hud__value" id="info-length">0 м</span>
+
+    <div class="route-topbar__center">
+        <button type="button" class="route-pill" id="btn-add-custom">
+            <span>📍</span> Добавить точку
+        </button>
+        <button type="button" class="route-pill" id="btn-map-content">
+            <span>🗺</span> Слои карты
+        </button>
+        <button type="button" class="route-pill" id="btn-preferences">
+            <span>⚙</span> Настройки
+        </button>
     </div>
-    <div class="route-hud__status" id="info-status">Кликните по карте, чтобы добавить точку</div>
+
+    <div class="route-topbar__right">
+        <button type="button" class="route-btn route-btn--ghost" id="btn-import-gpx" title="Импорт трека из GPX">
+            📂 Импорт GPX
+        </button>
+        <button type="button" class="route-btn route-btn--ghost" id="btn-download-gpx" disabled title="Скачать текущий маршрут в GPX">
+            ⬇ Скачать
+        </button>
+        <button type="button" class="route-btn route-btn--primary" id="btn-save" disabled>
+            💾 Сохранить
+        </button>
+    </div>
 </div>
 
-<!-- ============================================================
-     НИЖНЯЯ ПАНЕЛЬ УПРАВЛЕНИЯ
-     ============================================================ -->
-<div class="route-bottom-bar">
-    <button type="button" class="route-btn route-btn--ghost" id="btn-undo">
-        ↩ Отменить точку
-    </button>
-    <button type="button" class="route-btn route-btn--ghost" id="btn-add-note">
-        📍 Метка
-    </button>
-    <button type="button" class="route-btn route-btn--danger" id="btn-clear">
-        🗑 Очистить
-    </button>
-    <div class="route-bottom-bar__spacer"></div>
-    <button type="button" class="route-btn route-btn--primary" id="btn-save">
-        💾 Сохранить маршрут
-    </button>
+<!-- Скрытый input для импорта GPX -->
+<input type="file" id="gpx-import-input" accept=".gpx,application/gpx+xml" hidden>
+
+<!-- МЕНЮ СЛОЁВ -->
+<div class="route-layers" id="layers-menu" hidden>
+    <div class="route-layers__title">Слои карты</div>
+    <label class="route-layers__item">
+        <input type="radio" name="tile-layer" value="osm" checked>
+        <span>OpenStreetMap</span>
+    </label>
+    <label class="route-layers__item">
+        <input type="radio" name="tile-layer" value="carto">
+        <span>Светлая (CARTO)</span>
+    </label>
+    <label class="route-layers__item">
+        <input type="radio" name="tile-layer" value="humanitarian">
+        <span>Гуманитарная OSM</span>
+    </label>
+    <label class="route-layers__item">
+        <input type="radio" name="tile-layer" value="topo">
+        <span>Топографическая</span>
+    </label>
+    <label class="route-layers__item">
+        <input type="radio" name="tile-layer" value="satellite">
+        <span>Спутник</span>
+    </label>
 </div>
 
-<!-- ============================================================
-     МОДАЛЬНОЕ ОКНО МЕТКИ
-     ============================================================ -->
-<div class="route-modal" id="note-modal" hidden>
+<!-- ПАНЕЛЬ НАСТРОЕК -->
+<div class="route-prefs" id="prefs-menu" hidden>
+    <div class="route-layers__title">Настройки</div>
+    <label class="route-layers__item">
+        <input type="checkbox" id="pref-autosave" checked>
+        <span>Автосохранение черновика</span>
+    </label>
+    <label class="route-layers__item">
+        <input type="checkbox" id="pref-show-elev" checked>
+        <span>Показывать профиль высот</span>
+    </label>
+</div>
+
+<!-- ЛЕВАЯ ПАНЕЛЬ -->
+<aside class="route-sidebar" id="route-sidebar">
+    <div class="route-sidebar__head">
+        <h1 class="route-sidebar__title">Маршрут</h1>
+    </div>
+
+    <div class="route-waypoints" id="route-waypoints">
+        <div class="route-waypoints__empty">Нажмите на карту, чтобы начать</div>
+    </div>
+
+    <div class="route-search">
+        <div class="route-search__row">
+            <span class="route-search__icon">🔍</span>
+            <input type="text" id="search-input" placeholder="Найти место" autocomplete="off">
+            <button type="button" class="route-search__geo" id="btn-search-geo" title="Вставить координаты">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+                    <rect x="3" y="3" width="18" height="18" rx="2"/>
+                    <path d="M9 3v18"/>
+                    <path d="M15 3v18"/>
+                </svg>
+            </button>
+        </div>
+        <div class="route-search__results" id="search-results" hidden></div>
+    </div>
+
+    <div class="route-suggestions">
+        <div class="route-suggestions__title">Быстрые действия</div>
+
+        <button type="button" class="route-suggestion" id="btn-suggestion-location">
+            <span class="route-suggestion__icon route-suggestion__icon--geo">📍</span>
+            <span class="route-suggestion__label">Моё местоположение</span>
+        </button>
+        <button type="button" class="route-suggestion" id="btn-suggestion-saved">
+            <span class="route-suggestion__icon route-suggestion__icon--saved">🔖</span>
+            <span class="route-suggestion__label">Сохранённые места</span>
+            <span class="route-suggestion__meta" id="saved-count">0</span>
+        </button>
+    </div>
+
+    <div class="route-sidebar__stats">
+        <div class="route-stat">
+            <div class="route-stat__value" id="info-length">0 м</div>
+            <div class="route-stat__label">Длина</div>
+        </div>
+        <div class="route-stat">
+            <div class="route-stat__value" id="info-points">0</div>
+            <div class="route-stat__label">Точек</div>
+        </div>
+        <div class="route-stat">
+            <div class="route-stat__value" id="info-elev">—</div>
+            <div class="route-stat__label">Набор</div>
+        </div>
+    </div>
+
+    <div class="route-sidebar__status" id="info-status">Нажмите на карту, чтобы добавить точку</div>
+</aside>
+
+<!-- ПРОФИЛЬ ВЫСОТ -->
+<div class="route-elevation" id="elevation-panel" hidden>
+    <div class="route-elevation__head">
+        <span class="route-elevation__title">Профиль высот</span>
+        <div class="route-elevation__stats" id="elev-stats"></div>
+    </div>
+    <div class="route-elevation__chart">
+        <canvas id="elev-chart"></canvas>
+    </div>
+</div>
+
+<!-- МОДАЛКА МЕНЮ ТОЧКИ -->
+<div class="route-modal" id="point-menu-modal" hidden>
     <div class="route-modal__box">
-        <h3 class="route-modal__title">Новая метка</h3>
-        <input type="hidden" id="note-lat">
-        <input type="hidden" id="note-lng">
-        <div class="field">
-            <label for="note-name">Название</label>
-            <input type="text" id="note-name" maxlength="120" placeholder="Например: Питьевая вода">
-        </div>
-        <div class="field">
-            <label for="note-text">Описание</label>
-            <textarea id="note-text" rows="3" maxlength="500" placeholder="Что здесь важного?"></textarea>
-        </div>
-        <div class="route-modal__actions">
-            <button type="button" class="route-btn route-btn--ghost" id="note-cancel">Отмена</button>
-            <button type="button" class="route-btn route-btn--primary" id="note-save">Добавить</button>
+        <h3 class="route-modal__title" id="point-menu-title">Точка</h3>
+        <div class="route-modal__coords" id="point-menu-coords"></div>
+
+        <div class="route-modal__actions route-modal__actions--column">
+            <button type="button" class="route-btn route-btn--primary" id="point-edit">✏️ Редактировать</button>
+            <button type="button" class="route-btn route-btn--danger" id="point-delete">🗑 Удалить точку</button>
+            <button type="button" class="route-btn route-btn--ghost" id="point-close">Отмена</button>
         </div>
     </div>
 </div>
 
-<!-- ============================================================
-     МОДАЛЬНОЕ ОКНО СОХРАНЕНИЯ
-     ============================================================ -->
+<!-- МОДАЛКА РЕДАКТИРОВАНИЯ ТОЧКИ -->
+<div class="route-modal" id="point-edit-modal" hidden>
+    <div class="route-modal__box">
+        <h3 class="route-modal__title" id="point-edit-title">Редактировать точку</h3>
+
+        <div class="field">
+            <label for="point-name">Название</label>
+            <input type="text" id="point-name" maxlength="120" placeholder="Например: Старт у парка">
+        </div>
+        <div class="field">
+            <label for="point-note">Описание</label>
+            <textarea id="point-note" rows="3" maxlength="500" placeholder="Что здесь важного?"></textarea>
+        </div>
+
+        <div class="route-modal__actions">
+            <button type="button" class="route-btn route-btn--ghost" id="point-edit-cancel">Отмена</button>
+            <button type="button" class="route-btn route-btn--primary" id="point-edit-save">Сохранить</button>
+        </div>
+    </div>
+</div>
+
+<!-- МОДАЛКА ДОБАВЛЕНИЯ ПРОИЗВОЛЬНОЙ ТОЧКИ -->
+<div class="route-modal" id="custom-point-modal" hidden>
+    <div class="route-modal__box">
+        <h3 class="route-modal__title">Добавить точку</h3>
+
+        <div class="form-row">
+            <div class="field">
+                <label for="cp-lat">Широта</label>
+                <input type="number" id="cp-lat" step="0.000001" placeholder="55.7558">
+            </div>
+            <div class="field">
+                <label for="cp-lng">Долгота</label>
+                <input type="number" id="cp-lng" step="0.000001" placeholder="37.6173">
+            </div>
+        </div>
+
+        <div class="route-modal__actions route-modal__actions--between">
+            <button type="button" class="route-btn route-btn--ghost" id="cp-use-center">Взять центр карты</button>
+        </div>
+
+        <div class="field">
+            <label for="cp-name">Название</label>
+            <input type="text" id="cp-name" maxlength="120" placeholder="Например: Поворот налево">
+        </div>
+        <div class="field">
+            <label for="cp-note">Описание</label>
+            <textarea id="cp-note" rows="3" maxlength="500" placeholder="Дополнительная информация"></textarea>
+        </div>
+
+        <div class="route-modal__actions">
+            <button type="button" class="route-btn route-btn--ghost" id="cp-cancel">Отмена</button>
+            <button type="button" class="route-btn route-btn--primary" id="cp-save">Добавить</button>
+        </div>
+    </div>
+</div>
+
+<!-- МОДАЛКА СОХРАНЁННЫХ МЕСТ -->
+<div class="route-modal" id="saved-places-modal" hidden>
+    <div class="route-modal__box route-modal__box--wide">
+        <h3 class="route-modal__title">Сохранённые места</h3>
+
+        <div id="saved-places-list" class="saved-places-list">
+            <div class="saved-places-empty">Пока нет сохранённых мест</div>
+        </div>
+
+        <form id="saved-place-form" class="saved-place-form">
+            <input type="hidden" id="sp-lat">
+            <input type="hidden" id="sp-lng">
+            <div class="field">
+                <label for="sp-name">Название</label>
+                <input type="text" id="sp-name" maxlength="120" placeholder="Например: Дом, Работа, Любимый парк">
+            </div>
+            <div class="route-modal__actions">
+                <button type="button" class="route-btn route-btn--ghost" id="sp-cancel">Закрыть</button>
+                <button type="button" class="route-btn route-btn--ghost" id="sp-use-current">Использовать центр карты</button>
+                <button type="submit" class="route-btn route-btn--primary">Добавить</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- МОДАЛКА СОХРАНЕНИЯ МАРШРУТА -->
 <div class="route-modal" id="save-modal" hidden>
     <div class="route-modal__box route-modal__box--wide">
         <h3 class="route-modal__title">Сохранить маршрут</h3>
@@ -582,5 +508,19 @@ require __DIR__ . '/includes/header.php';
         </form>
     </div>
 </div>
+
+<!-- СКРИПТЫ: подключаем в правильном порядке после разметки -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+window.__ROUTE_EDITOR__ = {
+    osrmBase: 'https://router.project-osrm.org',
+    nominatim: 'https://nominatim.openstreetmap.org',
+    savedPlacesApi: <?= json_encode(url('api/saved-places.php')) ?>,
+    csrf: <?= json_encode(csrf_token()) ?>,
+    defaultCenter: [55.751244, 37.618423],
+};
+</script>
+<script src="<?= e(url('assets/js/route-editor.js')) ?>"></script>
 
 <?php require __DIR__ . '/includes/footer.php'; ?>

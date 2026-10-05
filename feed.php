@@ -144,6 +144,89 @@ if (!function_exists('feed_fetch_unified')) {
     }
 }
 
+if (!function_exists('feed_fetch_unified_clubs')) {
+    /**
+     * Единая лента для вкладки «Мои клубы»:
+     * активности и посты участников клубов, в которых состоит пользователь.
+     */
+    function feed_fetch_unified_clubs(int $viewerId, string $type, int $limit, int $offset): array
+    {
+        $aType = ($type !== '') ? $type : '';
+
+        $sqlA = 'SELECT
+                    "activity" AS kind,
+                    a.id AS id,
+                    a.user_id AS user_id,
+                    a.started_at AS started_at,
+                    a.created_at AS created_at,
+                    COALESCE(a.started_at, a.created_at) AS sort_at,
+                    a.type AS type,
+                    a.title AS title,
+                    a.description AS description,
+                    a.distance_m AS distance_m,
+                    a.duration_sec AS duration_sec,
+                    a.avg_speed_mps AS avg_speed_mps,
+                    a.elevation_gain_m AS elevation_gain_m,
+                    a.track_json AS track_json,
+                    a.visibility AS visibility,
+                    u.username, u.display_name, u.avatar_url,
+                    (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id) AS likes_count,
+                    (SELECT COUNT(*) FROM activity_comments c WHERE c.activity_id = a.id) AS comments_count,
+                    (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id AND l.user_id = :vid) AS liked_by_me
+                 FROM activities a
+                 JOIN users u ON u.id = a.user_id
+                 JOIN club_members cm ON cm.user_id = u.id AND cm.status = "active"
+                 JOIN club_members mine
+                      ON mine.club_id = cm.club_id
+                     AND mine.user_id = :vid2
+                     AND mine.status = "active"
+                 WHERE a.visibility = "public"';
+        if ($aType !== '') $sqlA .= ' AND a.type = :atype';
+
+        $sqlP = 'SELECT
+                    "post" AS kind,
+                    p.id AS id,
+                    p.user_id AS user_id,
+                    NULL AS started_at,
+                    p.created_at AS created_at,
+                    p.created_at AS sort_at,
+                    NULL AS type,
+                    p.title AS title,
+                    p.body AS description,
+                    NULL AS distance_m,
+                    NULL AS duration_sec,
+                    NULL AS avg_speed_mps,
+                    NULL AS elevation_gain_m,
+                    NULL AS track_json,
+                    p.visibility AS visibility,
+                    u.username, u.display_name, u.avatar_url,
+                    (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id) AS likes_count,
+                    (SELECT COUNT(*) FROM post_comments c WHERE c.post_id = p.id) AS comments_count,
+                    (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id AND l.user_id = :vid3) AS liked_by_me
+                 FROM posts p
+                 JOIN users u ON u.id = p.user_id
+                 JOIN club_members cm ON cm.user_id = u.id AND cm.status = "active"
+                 JOIN club_members mine
+                      ON mine.club_id = cm.club_id
+                     AND mine.user_id = :vid4
+                     AND mine.status = "active"
+                 WHERE p.visibility = "public"';
+
+        $sql = '(' . $sqlA . ') UNION ALL (' . $sqlP . ') ORDER BY sort_at DESC, id DESC LIMIT :lim OFFSET :off';
+
+        $stmt = db()->prepare($sql);
+        $stmt->bindValue(':vid',  $viewerId, PDO::PARAM_INT);
+        $stmt->bindValue(':vid2', $viewerId, PDO::PARAM_INT);
+        $stmt->bindValue(':vid3', $viewerId, PDO::PARAM_INT);
+        $stmt->bindValue(':vid4', $viewerId, PDO::PARAM_INT);
+        if ($aType !== '') $stmt->bindValue(':atype', $aType);
+        $stmt->bindValue(':lim', $limit,  PDO::PARAM_INT);
+        $stmt->bindValue(':off', $offset, PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll();
+    }
+}
+
 if (!function_exists('feed_activity_icon')) {
     function feed_activity_icon(string $t): string
     {
@@ -185,7 +268,7 @@ $me = require_login();
 $tab  = (string)($_GET['tab'] ?? 'all');
 $type = (string)($_GET['type'] ?? '');
 
-$allowedTabs = ['all', 'following', 'mine'];
+$allowedTabs = ['all', 'following', 'clubs', 'mine'];
 if (!in_array($tab, $allowedTabs, true)) $tab = 'all';
 
 $allowedTypes = ['', 'run', 'ride', 'swim', 'ski', 'walk', 'hike', 'other'];
@@ -196,7 +279,11 @@ $rows = [];
 $error = null;
 
 try {
-    $rows = feed_fetch_unified((int)$me['id'], $tab, $type, $limit, 0);
+    if ($tab === 'clubs') {
+        $rows = feed_fetch_unified_clubs((int)$me['id'], $type, $limit, 0);
+    } else {
+        $rows = feed_fetch_unified((int)$me['id'], $tab, $type, $limit, 0);
+    }
 } catch (Throwable $e) {
     $error = $e->getMessage();
 }
@@ -291,6 +378,34 @@ try {
     $myStats['distance_m'] = (float)($stats['distance_m'] ?? 0);
 } catch (Throwable $e) {}
 
+// ---- Мои клубы (для левой колонки) ----
+$myClubs = [];
+$myClubsCount = 0;
+try {
+    $stmt = db()->prepare(
+        'SELECT c.id, c.name, c.slug, c.avatar_url, c.member_count,
+                m.role, m.joined_at
+           FROM club_members m
+           JOIN clubs c ON c.id = m.club_id
+          WHERE m.user_id = ? AND m.status = "active" AND c.is_banned = 0
+       ORDER BY FIELD(m.role, "owner","admin","moderator","member"),
+                m.joined_at DESC
+          LIMIT 8'
+    );
+    $stmt->execute([(int)$me['id']]);
+    $myClubs = $stmt->fetchAll();
+
+    $cnt = db()->prepare(
+        'SELECT COUNT(*) FROM club_members
+          WHERE user_id = ? AND status = "active"'
+    );
+    $cnt->execute([(int)$me['id']]);
+    $myClubsCount = (int)$cnt->fetchColumn();
+} catch (Throwable $e) {
+    $myClubs = [];
+    $myClubsCount = 0;
+}
+
 $hasMore = count($rows) === $limit;
 
 $pageTitle = 'Лента';
@@ -306,7 +421,7 @@ $apiFeed         = url('api/feed.php');
 $csrfToken       = csrf_token();
 
 // ============================================================
-// INLINE JS (аккуратно, без одинарных кавычек внутри)
+// INLINE JS
 // ============================================================
 
 $tracksJson   = json_encode($tracksByActivity, JSON_UNESCAPED_UNICODE);
@@ -787,7 +902,7 @@ window.__CSRF__ = {$csrfJson};
         return (m / 1000).toFixed(2).replace(".", ",") + " км";
     }
 
-        function renderList(efforts) {
+    function renderList(efforts) {
         if (!efforts.length) {
             return "<div class=\"efforts-modal__empty\">Сегментов на этой активности нет</div>";
         }
@@ -896,6 +1011,53 @@ require __DIR__ . '/includes/header.php';
             </div>
         </div>
 
+        <!-- ============ МОИ КЛУБЫ ============ -->
+        <div class="sidebar-card sidebar-card--clubs">
+            <h3 class="sidebar-card__title">
+                Мои клубы
+                <?php if ($myClubsCount > 0): ?>
+                    <span class="sidebar-card__count"><?= (int)$myClubsCount ?></span>
+                <?php endif; ?>
+            </h3>
+
+            <?php if (!$myClubs): ?>
+                <p class="sidebar-clubs__empty muted">
+                    Вы пока не состоите ни в одном клубе.
+                </p>
+                <a href="<?= e(url('clubs.php')) ?>" class="sidebar-clubs__cta">Найти клуб →</a>
+            <?php else: ?>
+                <div class="sidebar-clubs">
+                    <?php foreach ($myClubs as $c): ?>
+                        <a class="sidebar-club"
+                           href="<?= e(url('club.php?slug=' . urlencode((string)$c['slug']))) ?>"
+                           title="<?= e($c['name']) ?>">
+                            <span class="sidebar-club__avatar">
+                                <?php if (!empty($c['avatar_url'])): ?>
+                                    <img src="<?= e($c['avatar_url']) ?>" alt="">
+                                <?php else: ?>
+                                    <?= e(mb_substr((string)$c['name'], 0, 1)) ?>
+                                <?php endif; ?>
+                            </span>
+                            <span class="sidebar-club__info">
+                                <span class="sidebar-club__name"><?= e($c['name']) ?></span>
+                                <span class="sidebar-club__meta muted">
+                                    <?= (int)$c['member_count'] ?> уч.
+                                    <?php if ($c['role'] === 'owner'): ?> · 👑<?php endif; ?>
+                                    <?php if ($c['role'] === 'admin'): ?> · ⭐<?php endif; ?>
+                                </span>
+                            </span>
+                        </a>
+                    <?php endforeach; ?>
+
+                    <?php if ($myClubsCount > count($myClubs)): ?>
+                        <a href="<?= e(url('clubs.php')) ?>" class="sidebar-clubs__more">
+                            Ещё <?= (int)($myClubsCount - count($myClubs)) ?> →
+                        </a>
+                    <?php endif; ?>
+                </div>
+            <?php endif; ?>
+        </div>
+
         <div class="sidebar-card">
             <h3 class="sidebar-card__title">Действия</h3>
             <nav class="sidebar-nav">
@@ -904,6 +1066,7 @@ require __DIR__ . '/includes/header.php';
                 <a href="<?= e(url('post-create.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">📝</span><span>Запись в блог</span></a>
                 <a href="<?= e(url('route-create.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">🗺️</span><span>Маршрут</span></a>
                 <a href="<?= e(url('segment-create.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">⚡</span><span>Сегмент</span></a>
+                <a href="<?= e(url('clubs.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">🏁</span><span>Все клубы</span></a>
             </nav>
         </div>
     </aside>
@@ -916,6 +1079,7 @@ require __DIR__ . '/includes/header.php';
                     $tabLabels = [
                         'all'       => 'Всё',
                         'following' => 'Подписки',
+                        'clubs'     => 'Мои клубы',
                         'mine'      => 'Мои',
                     ];
                 ?>
@@ -957,6 +1121,9 @@ require __DIR__ . '/includes/header.php';
                 <?php elseif ($tab === 'following'): ?>
                     <p>В подписках пока пусто.</p>
                     <a href="<?= e(url('search.php')) ?>" class="btn btn--primary">Найти людей</a>
+                <?php elseif ($tab === 'clubs'): ?>
+                    <p>В ваших клубах пока нет активностей.</p>
+                    <a href="<?= e(url('clubs.php')) ?>" class="btn btn--primary">Найти клубы</a>
                 <?php else: ?>
                     <p>В ленте пока нет записей.</p>
                     <a href="<?= e(url('activity-upload.php')) ?>" class="btn btn--primary">Загрузить активность</a>
@@ -1137,6 +1304,7 @@ require __DIR__ . '/includes/header.php';
                                         </span>
                                     </span>
                                 </a>
+                                <span class="activity-type activity-type--post">📖 Запись</span>
                             </div>
 
                             <a href="<?= e(url('post.php?id=' . $pid)) ?>" class="post-card__title-link">

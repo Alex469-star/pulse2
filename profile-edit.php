@@ -268,10 +268,7 @@ function pulse_delete_old_avatar(string $avatarUrl, string $uploadsDir, string $
     <div class="form-card">
         <h1 class="form-card__title">Настройки профиля</h1>
         
-        <div id="heic-progress" class="heic-progress" hidden>
-    <span class="heic-progress__spinner"></span>
-    <span class="heic-progress__text">Конвертирую HEIC-фото…</span>
-</div>
+        
         
         <p class="form-card__subtitle">
             Обновите личные данные, фото профиля и пароль.

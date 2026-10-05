@@ -28,79 +28,133 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // ---- Загрузка ----
 $notifications = [];
 $error = null;
+$unreadCount = 0;
 
 try {
     $notifications = Notification::allForUser((int)$me['id'], 100);
     $unreadCount   = Notification::unreadCount((int)$me['id']);
 } catch (Throwable $e) {
     $error = $e->getMessage();
-    $unreadCount = 0;
 }
 
 $pageTitle = 'Уведомления';
 require __DIR__ . '/includes/header.php';
 
-/**
- * Текст уведомления.
- */
-function notif_text(array $n): string
-{
-    $actor = '<strong>' . e((string)($n['display_name'] ?? 'Кто-то')) . '</strong>';
-    $message = (string)($n['message'] ?? '');
+/* ============================================================
+   ХЕЛПЕРЫ РЕНДЕРА
+   ============================================================ */
 
-    return match ($n['type']) {
-        'like'              => $actor . ' оценил вашу активность',
-        'comment'           => $actor . ' оставил комментарий',
-        'follow'            => $actor . ' подписался на вас',
-        'mention'           => $actor . ' упомянул вас',
-        'segment_lost_lead' => $actor . ' обошёл вас на сегменте',
-        'segment_new_lead'  => 'Вы вышли на <strong>1-е место</strong> на сегменте',
-        'system'            => e($message !== '' ? $message : 'Системное уведомление'),
-        default             => e($message !== '' ? $message : 'Уведомление'),
-    };
+if (!function_exists('notif_target')) {
+    function notif_target(string $targetType): array
+    {
+        if (strpos($targetType, 'club_post:') === 0) {
+            return [
+                'kind'    => 'club_post',
+                'club_id' => (int)substr($targetType, strlen('club_post:')),
+            ];
+        }
+        if (strpos($targetType, 'club:') === 0) {
+            return [
+                'kind'    => 'club',
+                'club_id' => (int)substr($targetType, strlen('club:')),
+            ];
+        }
+        return ['kind' => $targetType !== '' ? $targetType : null, 'club_id' => 0];
+    }
 }
 
-/**
- * Иконка и CSS-класс.
- */
-function notif_icon(string $type): array
-{
-    return match ($type) {
-        'like'              => ['♥',  'like'],
-        'comment'           => ['💬', 'comment'],
-        'follow'            => ['👤', 'follow'],
-        'mention'           => ['@',  'mention'],
-        'segment_lost_lead' => ['🥈', 'lost'],
-        'segment_new_lead'  => ['🏆', 'new'],
-        'system'            => ['🔔', 'system'],
-        default             => ['🔔', 'system'],
-    };
+if (!function_exists('notif_text')) {
+    function notif_text(array $n): string
+    {
+        $actor   = '<strong>' . e((string)($n['display_name'] ?? 'Кто-то')) . '</strong>';
+        $message = (string)($n['message'] ?? '');
+        $targetType = (string)($n['target_type'] ?? '');
+
+        if (strpos($targetType, 'club') === 0 && $message !== '') {
+            return e($message);
+        }
+
+        return match ($n['type']) {
+            'like'              => $actor . ' оценил вашу активность',
+            'comment'           => $actor . ' оставил комментарий',
+            'follow'            => $actor . ' подписался на вас',
+            'mention'           => $actor . ' упомянул вас',
+            'segment_lost_lead' => $actor . ' обошёл вас на сегменте',
+            'segment_new_lead'  => 'Вы вышли на <strong>1-е место</strong> на сегменте',
+            'club_join'         => e($message !== '' ? $message : ($actor . ' вступил в клуб')),
+            'club_post'         => e($message !== '' ? $message : ($actor . ' написал на стене клуба')),
+            'club_role'         => e($message !== '' ? $message : 'Ваша роль в клубе изменена'),
+            'club_event'        => e($message !== '' ? $message : 'Новое событие в клубе'),
+            'system'            => e($message !== '' ? $message : 'Системное уведомление'),
+            default             => e($message !== '' ? $message : 'Уведомление'),
+        };
+    }
 }
 
-/**
- * URL, куда ведёт уведомление.
- */
-function notif_url(array $n): string
-{
-    $targetType = (string)($n['target_type'] ?? '');
-    $targetId   = (int)($n['target_id'] ?? 0);
+if (!function_exists('notif_icon')) {
+    function notif_icon(string $type): array
+    {
+        return match ($type) {
+            'like'              => ['♥',  'like'],
+            'comment'           => ['💬', 'comment'],
+            'follow'            => ['👤', 'follow'],
+            'mention'           => ['@',  'mention'],
+            'segment_lost_lead' => ['🥈', 'lost'],
+            'segment_new_lead'  => ['🏆', 'new'],
+            'club_join'         => ['🏁', 'system'],
+            'club_post'         => ['📝', 'comment'],
+            'club_role'         => ['⭐', 'system'],
+            'club_event'        => ['📅', 'system'],
+            'system'            => ['🔔', 'system'],
+            default             => ['🔔', 'system'],
+        };
+    }
+}
 
-    if ($targetType === 'activity' && $targetId > 0) {
-        return url('activity.php?id=' . $targetId);
+if (!function_exists('notif_url')) {
+    function notif_url(array $n): string
+    {
+        // 1. Если в уведомлении явно задан URL — используем его
+        if (!empty($n['url'])) {
+            return (string)$n['url'];
+        }
+
+        // 2. Иначе строим из target_type / target_id
+        $targetType = (string)($n['target_type'] ?? '');
+        $targetId   = (int)($n['target_id'] ?? 0);
+        $target     = notif_target($targetType);
+
+        if ($target['kind'] === 'club_post' && $target['club_id'] > 0) {
+            return url('club.php?id=' . $target['club_id'] . '#post-' . $targetId);
+        }
+        if ($target['kind'] === 'club' && $target['club_id'] > 0) {
+            return url('club.php?id=' . $target['club_id']);
+        }
+        if ($targetType === 'club' && $targetId > 0) {
+            return url('club.php?id=' . $targetId);
+        }
+        if ($targetType === 'club_event' && $targetId > 0) {
+            return url('club-event.php?id=' . $targetId);
+        }
+        if ($targetType === 'activity' && $targetId > 0) {
+            return url('activity.php?id=' . $targetId);
+        }
+        if ($targetType === 'segment' && $targetId > 0) {
+            return url('segment.php?id=' . $targetId);
+        }
+        if ($targetType === 'post' && $targetId > 0) {
+            return url('post.php?id=' . $targetId);
+        }
+        if (!empty($n['username'])) {
+            return url('profile.php?u=' . urlencode((string)$n['username']));
+        }
+        return url('notifications.php');
     }
-    if ($targetType === 'segment' && $targetId > 0) {
-        return url('segment.php?id=' . $targetId);
-    }
-    if (!empty($n['username'])) {
-        return url('profile.php?u=' . urlencode((string)$n['username']));
-    }
-    return url('notifications.php');
 }
 ?>
 
 <section class="notif-page">
 
-    <!-- Заголовок -->
     <header class="notif-page__head">
         <div class="notif-page__title-wrap">
             <h1 class="notif-page__title">Уведомления</h1>

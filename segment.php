@@ -62,7 +62,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $me) {
 
     if ($action === 'rematch') {
         try {
-            // Пересчитываем ВСЕ активности ВСЕХ пользователей по этому сегменту
             $result = SegmentMatcher::matchAllUsersForSegment($segmentId);
             $msg = sprintf(
                 'Обработано активностей: %d, найдено усилий: %d',
@@ -98,6 +97,7 @@ $leaderboard = [];
 $stats = ['efforts' => 0, 'athletes' => 0];
 $myRank = null;
 $myBest = null;
+$elevationProfile = [];
 
 try {
     $leaderboard = Segment::leaderboard($segmentId, 100);
@@ -106,21 +106,29 @@ try {
         $myRank = Segment::userRank($segmentId, (int)$me['id']);
         $myBest = Segment::userBestEffort($segmentId, (int)$me['id']);
     }
+    $elevationProfile = Segment::elevationProfile($segmentId, 800);
 } catch (Throwable $e) {
     $error = $e->getMessage();
 }
 
 $points = Segment::parseTrackJson((string)($segment['track_json'] ?? ''));
-
 $segmentDistance = (float)($segment['distance_m'] ?? 0);
 
 $pageTitle = $segment['name'];
 
 $extraCss = ['https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'];
-$extraJs  = ['https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'];
+$extraJs  = [
+    'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+    'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js',
+];
 
 $inlineJs = '
 window.__SEGMENT_POINTS__ = ' . json_encode($points, JSON_UNESCAPED_UNICODE) . ';
+window.__SEGMENT_ELEV__   = ' . json_encode($elevationProfile, JSON_UNESCAPED_UNICODE) . ';
+
+/* ============================================================
+   КАРТА
+   ============================================================ */
 (function () {
     if (typeof L === "undefined") return;
     var pts = window.__SEGMENT_POINTS__ || [];
@@ -143,6 +151,92 @@ window.__SEGMENT_POINTS__ = ' . json_encode($points, JSON_UNESCAPED_UNICODE) . '
         radius: 7, color: "#b3261e", fillColor: "#b3261e", fillOpacity: 1, weight: 2
     }).bindPopup("Финиш").addTo(map);
     map.fitBounds(line.getBounds(), { padding: [30, 30] });
+})();
+
+/* ============================================================
+   ПРОФИЛЬ ВЫСОТ
+   ============================================================ */
+(function () {
+    if (typeof Chart === "undefined") return;
+    var data = window.__SEGMENT_ELEV__ || [];
+    var canvas = document.getElementById("segment-elev-chart");
+    if (!canvas || !data.length) return;
+
+    var minEle = Infinity, maxEle = -Infinity;
+    data.forEach(function (p) {
+        if (p.ele < minEle) minEle = p.ele;
+        if (p.ele > maxEle) maxEle = p.ele;
+    });
+
+    var statsEl = document.getElementById("segment-elev-stats");
+    if (statsEl) {
+        statsEl.innerHTML =
+            "<span>мин <strong>" + Math.round(minEle) + " м</strong></span>" +
+            "<span>макс <strong>" + Math.round(maxEle) + " м</strong></span>" +
+            "<span>перепад <strong>" + Math.round(maxEle - minEle) + " м</strong></span>";
+    }
+
+    var ctx = canvas.getContext("2d");
+    var grad = ctx.createLinearGradient(0, 0, 0, 240);
+    grad.addColorStop(0, "rgba(255,90,31,.45)");
+    grad.addColorStop(1, "rgba(255,90,31,.02)");
+
+    new Chart(ctx, {
+        type: "line",
+        data: {
+            labels: data.map(function (p) { return p.d; }),
+            datasets: [{
+                label: "Высота",
+                data: data.map(function (p) { return p.ele; }),
+                borderColor: "#ff5a1f",
+                backgroundColor: grad,
+                borderWidth: 1.5,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                fill: true,
+                tension: 0.25,
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: "rgba(15,20,32,.92)",
+                    padding: 10, cornerRadius: 8, displayColors: false,
+                    callbacks: {
+                        title: function (items) {
+                            var d = items[0].parsed.x;
+                            return d >= 1000 ? (d / 1000).toFixed(2) + " км" : Math.round(d) + " м";
+                        },
+                        label: function (item) {
+                            return "Высота: " + item.parsed.y.toFixed(0) + " м";
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    type: "linear", grid: { display: false },
+                    ticks: {
+                        maxTicksLimit: 6,
+                        callback: function (v) {
+                            return v >= 1000 ? (v / 1000).toFixed(1) + " км" : Math.round(v) + " м";
+                        }
+                    }
+                },
+                y: {
+                    grid: { color: "rgba(15,20,32,.06)" },
+                    ticks: {
+                        maxTicksLimit: 5,
+                        callback: function (v) { return v + " м"; }
+                    }
+                }
+            }
+        }
+    });
 })();
 ';
 
@@ -251,6 +345,18 @@ function format_elapsed(int $seconds): string
         <div id="segment-map" class="map"></div>
     </div>
 
+    <?php if ($elevationProfile): ?>
+        <div class="chart-card segment-view__elev">
+            <div class="chart-card__head">
+                <h2 class="chart-card__title">⛰️ Профиль высот на участке</h2>
+                <div class="chart-card__stats" id="segment-elev-stats"></div>
+            </div>
+            <div class="chart-card__body">
+                <canvas id="segment-elev-chart"></canvas>
+            </div>
+        </div>
+    <?php endif; ?>
+
     <div class="segment-view__board">
         <div class="segment-view__board-head">
             <h2>Лидерборд</h2>
@@ -269,51 +375,93 @@ function format_elapsed(int $seconds): string
                 <?php endif; ?>
             </div>
         <?php else: ?>
-            <div class="leaderboard">
-                <?php foreach ($leaderboard as $i => $row): ?>
-                    <?php
-                        $rank = $i + 1;
-                        $rankClass = '';
-                        if ($rank === 1) $rankClass = 'leaderboard__row--gold';
-                        elseif ($rank === 2) $rankClass = 'leaderboard__row--silver';
-                        elseif ($rank === 3) $rankClass = 'leaderboard__row--bronze';
+            <div class="leaderboard-table-wrap">
+                <table class="leaderboard-table">
+                    <thead>
+                        <tr>
+                            <th class="lb-col-rank">Место</th>
+                            <th class="lb-col-name">Имя</th>
+                            <th class="lb-col-date">Дата</th>
+                            <th class="lb-col-speed">Скорость</th>
+                            <th class="lb-col-hr">Пульс</th>
+                            <th class="lb-col-pwr">Мощность</th>
+                            <th class="lb-col-time">Время</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php foreach ($leaderboard as $i => $row): ?>
+                        <?php
+                            $rank = $i + 1;
+                            $isMe = $me && (int)$row['user_id'] === (int)$me['id'];
 
-                        $isMe = $me && (int)$row['user_id'] === (int)$me['id'];
+                            $rankClass = '';
+                            if ($rank === 1) $rankClass = 'is-gold';
+                            elseif ($rank === 2) $rankClass = 'is-silver';
+                            elseif ($rank === 3) $rankClass = 'is-bronze';
 
-                        $targetUrl = !empty($row['activity_id'])
-                            ? url('activity.php?id=' . (int)$row['activity_id'])
-                            : url('profile.php?u=' . urlencode((string)$row['username']));
+                            $targetUrl = !empty($row['activity_id'])
+                                ? url('activity.php?id=' . (int)$row['activity_id'])
+                                : url('profile.php?u=' . urlencode((string)$row['username']));
 
-                        $avgSpeedMps = $row['avg_speed_mps'] ?? null;
-                        $speedKmh = $avgSpeedMps ? (float)$avgSpeedMps * 3.6 : null;
-                    ?>
-                    <a class="leaderboard__row <?= $rankClass ?> <?= $isMe ? 'leaderboard__row--me' : '' ?>"
-                       href="<?= e($targetUrl) ?>"
-                       title="Открыть активность с этим временем">
-                        <span class="leaderboard__rank"><?= $rank ?></span>
+                            $speedKmh = $row['avg_speed_mps'] !== null
+                                ? (float)$row['avg_speed_mps'] * 3.6
+                                : null;
 
-                        <span class="leaderboard__user">
-                            <span class="avatar avatar--sm">
-                                <?php if (!empty($row['avatar_url'])): ?>
-                                    <img src="<?= e($row['avatar_url']) ?>" alt="">
+                            $date = !empty($row['started_at'])
+                                ? date('d.m.Y', strtotime((string)$row['started_at']))
+                                : '—';
+                        ?>
+                        <tr class="leaderboard-table__row <?= $rankClass ?> <?= $isMe ? 'is-me' : '' ?>"
+                            data-href="<?= e($targetUrl) ?>">
+                            <td class="lb-col-rank">
+                                <span class="lb-rank"><?= $rank ?></span>
+                            </td>
+                            <td class="lb-col-name">
+                                <a class="lb-user" href="<?= e($targetUrl) ?>">
+                                    <span class="avatar avatar--sm">
+                                        <?php if (!empty($row['avatar_url'])): ?>
+                                            <img src="<?= e($row['avatar_url']) ?>" alt="">
+                                        <?php else: ?>
+                                            <?= e(mb_substr((string)$row['display_name'], 0, 1)) ?>
+                                        <?php endif; ?>
+                                    </span>
+                                    <span class="lb-user__name">
+                                        <?= e($row['display_name']) ?>
+                                        <?php if ($isMe): ?><span class="leaderboard__you">вы</span><?php endif; ?>
+                                    </span>
+                                </a>
+                            </td>
+                            <td class="lb-col-date"><?= e($date) ?></td>
+                            <td class="lb-col-speed">
+                                <?php if ($speedKmh !== null): ?>
+                                    <?= number_format($speedKmh, 1, '.', '') ?> <small>км/ч</small>
                                 <?php else: ?>
-                                    <?= e(mb_substr((string)$row['display_name'], 0, 1)) ?>
+                                    <span class="muted">—</span>
                                 <?php endif; ?>
-                            </span>
-                            <span class="leaderboard__name">
-                                <?= e($row['display_name']) ?>
-                                <?php if ($isMe): ?><span class="leaderboard__you">вы</span><?php endif; ?>
-                            </span>
-                        </span>
-
-                        <span class="leaderboard__metrics">
-                            <span class="leaderboard__time"><?= e(format_elapsed((int)$row['best_time'])) ?></span>
-                            <?php if ($speedKmh !== null): ?>
-                                <span class="leaderboard__speed"><?= number_format($speedKmh, 1, '.', '') ?> км/ч</span>
-                            <?php endif; ?>
-                        </span>
-                    </a>
-                <?php endforeach; ?>
+                            </td>
+                            <td class="lb-col-hr">
+                                <?php if (!empty($row['avg_hr'])): ?>
+                                    <?= (int)$row['avg_hr'] ?> <small>уд/мин</small>
+                                <?php else: ?>
+                                    <span class="muted">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <td class="lb-col-pwr">
+                                <?php if (!empty($row['avg_power_w'])): ?>
+                                    <?= (int)$row['avg_power_w'] ?> <small>Вт</small>
+                                <?php else: ?>
+                                    <span class="muted">—</span>
+                                <?php endif; ?>
+                            </td>
+                            <td class="lb-col-time">
+                                <a class="lb-time" href="<?= e($targetUrl) ?>">
+                                    <?= e(format_elapsed((int)$row['best_time'])) ?>
+                                </a>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
             </div>
         <?php endif; ?>
     </div>
@@ -347,5 +495,16 @@ function format_elapsed(int $seconds): string
         </div>
     <?php endif; ?>
 </section>
+
+<script>
+/* Клик по строке таблицы (кроме ссылок) открывает активность */
+document.querySelectorAll('.leaderboard-table__row[data-href]').forEach(function (row) {
+    row.addEventListener('click', function (e) {
+        if (e.target.closest('a')) return;
+        window.location.href = row.dataset.href;
+    });
+    row.style.cursor = 'pointer';
+});
+</script>
 
 <?php require __DIR__ . '/includes/footer.php'; ?>
