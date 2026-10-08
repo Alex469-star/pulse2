@@ -17,12 +17,14 @@ class Activity
                 (user_id, type, title, description, started_at, duration_sec,
                  distance_m, elevation_gain_m, avg_speed_mps, max_speed_mps,
                  calories, gear_id, track_json, visibility,
+                 fingerprint, track_hash,
                  avg_hr, max_hr, avg_cadence, max_cadence,
                  avg_power_w, max_power_w, avg_temp_c, has_sensors)
              VALUES
                 (:user_id, :type, :title, :description, :started_at, :duration_sec,
                  :distance_m, :elevation_gain_m, :avg_speed_mps, :max_speed_mps,
                  :calories, :gear_id, :track_json, :visibility,
+                 :fingerprint, :track_hash,
                  :avg_hr, :max_hr, :avg_cadence, :max_cadence,
                  :avg_power_w, :max_power_w, :avg_temp_c, :has_sensors)'
         );
@@ -41,6 +43,8 @@ class Activity
             ':gear_id'          => $d['gear_id'] ?? null,
             ':track_json'       => $d['track_json'] ?? null,
             ':visibility'       => $d['visibility'] ?? 'public',
+            ':fingerprint'      => $d['fingerprint'] ?? null,
+            ':track_hash'       => $d['track_hash'] ?? null,
             ':avg_hr'           => $d['avg_hr'] ?? null,
             ':max_hr'           => $d['max_hr'] ?? null,
             ':avg_cadence'      => $d['avg_cadence'] ?? null,
@@ -94,7 +98,6 @@ class Activity
 
     /**
      * Активности участников клубов, в которых состоит пользователь.
-     * Исключает собственные (их видно во вкладке «Мои»).
      */
     public static function feedFromClubs(int $viewerId, int $limit = 20, int $offset = 0): array
     {
@@ -260,6 +263,81 @@ class Activity
         }
 
         return $out;
+    }
+
+    // ============================================================
+    // ДЕДУПЛИКАЦИЯ ЗАГРУЖАЕМЫХ АКТИВНОСТЕЙ
+    // ============================================================
+
+    /**
+     * Считает «отпечаток» активности.
+     * Округляем значения, чтобы ловить слегка отличающиеся результаты парсинга.
+     */
+    public static function fingerprint(array $d): string
+    {
+        $type = (string)($d['type'] ?? 'run');
+
+        $startedAt = $d['started_at'] ?? null;
+        if ($startedAt) {
+            $ts = strtotime((string)$startedAt);
+            $startedNorm = $ts ? date('Y-m-d H:i', (int)($ts / 60) * 60) : '';
+        } else {
+            $startedNorm = '';
+        }
+
+        $dist = (float)($d['distance_m'] ?? 0);
+        $distNorm = (string)((int)round($dist / 10) * 10);
+
+        $dur = (int)($d['duration_sec'] ?? 0);
+        $durNorm = (string)((int)round($dur / 5) * 5);
+
+        return sha1(implode('|', [$type, $startedNorm, $distNorm, $durNorm]));
+    }
+
+    /**
+     * SHA-256 от нормализованного JSON трека.
+     */
+    public static function trackHash(?string $trackJson): ?string
+    {
+        if (empty($trackJson)) return null;
+        $normalized = preg_replace('/\s+/', '', $trackJson);
+        return hash('sha256', (string)$normalized);
+    }
+
+    /**
+     * Ищет дубликат у этого пользователя.
+     *
+     * @return array|null ['reason' => 'fingerprint'|'track_hash', 'activity' => [...]]
+     */
+    public static function findDuplicate(int $userId, string $fingerprint, ?string $trackHash): ?array
+    {
+        $s = db()->prepare(
+            'SELECT id, title, started_at, distance_m, duration_sec, type
+             FROM activities
+             WHERE user_id = ? AND fingerprint = ?
+             LIMIT 1'
+        );
+        $s->execute([$userId, $fingerprint]);
+        $row = $s->fetch();
+        if ($row) {
+            return ['reason' => 'fingerprint', 'activity' => $row];
+        }
+
+        if ($trackHash !== null) {
+            $s = db()->prepare(
+                'SELECT id, title, started_at, distance_m, duration_sec, type
+                 FROM activities
+                 WHERE user_id = ? AND track_hash = ?
+                 LIMIT 1'
+            );
+            $s->execute([$userId, $trackHash]);
+            $row = $s->fetch();
+            if ($row) {
+                return ['reason' => 'track_hash', 'activity' => $row];
+            }
+        }
+
+        return null;
     }
 
     // ============================================================

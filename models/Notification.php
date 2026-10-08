@@ -24,11 +24,12 @@ class Notification
         if ($actorId === $userId) return;
 
         $allowed = [
-            'like', 'comment', 'follow', 'mention', 'system',
-            'segment_new_lead', 'segment_lost_lead',
-            'territory_captured', 'territory_lost', 'territory_stolen',
-            'club_invite', 'club_join', 'club_post', 'club_role', 'club_event',
-        ];
+    'like', 'comment', 'comment_reply', 'follow', 'mention', 'system',
+    'segment_new_lead', 'segment_lost_lead',
+    'post_like', 'post_comment', 'post_comment_reply',
+    'territory_captured', 'territory_lost', 'territory_stolen',
+    'club_invite', 'club_join', 'club_post', 'club_role', 'club_event',
+];
         if (!in_array($type, $allowed, true)) return;
 
         try {

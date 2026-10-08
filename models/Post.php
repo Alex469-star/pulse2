@@ -207,20 +207,61 @@ class Post
     // КОММЕНТАРИИ
     // ============================================================
 
-    public static function addComment(int $postId, int $userId, string $body): int
+    /**
+     * Добавить комментарий к посту и разослать уведомления участникам треда.
+     *
+     * @param int      $postId
+     * @param int      $userId
+     * @param string   $body
+     * @param int|null $parentId  ID комментария, на который отвечают (если ответ)
+     */
+    public static function addComment(int $postId, int $userId, string $body, ?int $parentId = null): int
     {
         $s = db()->prepare(
-            'INSERT INTO post_comments (post_id, user_id, body) VALUES (?, ?, ?)'
+            'INSERT INTO post_comments (post_id, parent_id, user_id, body)
+             VALUES (?, ?, ?, ?)'
         );
-        $s->execute([$postId, $userId, $body]);
+        $s->execute([$postId, $parentId, $userId, $body]);
         $id = (int)db()->lastInsertId();
 
-        $s = db()->prepare('SELECT user_id FROM posts WHERE id = ?');
-        $s->execute([$postId]);
-        $owner = (int)$s->fetchColumn();
-        if ($owner && $owner !== $userId) {
-            Notification::push($owner, 'post_comment', $userId, 'post', $postId);
+        // ---- Собираем получателей ----
+        $ownerId = self::postOwner($postId);
+        $participants = self::commentParticipants($postId, $userId); // уже без автора нового комментария
+
+        if ($ownerId > 0 && $ownerId !== $userId) {
+            $participants[$ownerId] = true; // ключи-массив, чтобы не дублировать
         }
+
+        // Если это ответ — уведомим ещё и автора родительского комментария
+        if ($parentId !== null && $parentId > 0) {
+            $parentAuthor = self::commentAuthor($parentId);
+            if ($parentAuthor > 0 && $parentAuthor !== $userId) {
+                $participants[$parentAuthor] = true;
+            }
+        }
+
+        // ---- Рассылка ----
+        if ($participants) {
+            $type = ($parentId !== null && $parentId > 0) ? 'post_comment_reply' : 'post_comment';
+            $url  = url('post.php?id=' . $postId . '#comment-' . $id);
+
+            foreach (array_keys($participants) as $recipientId) {
+                // Антиспам: не чаще одного уведомления по этому посту за 6 часов
+                if (Notification::existsRecent((int)$recipientId, $type, 'post', $postId, 6)) {
+                    continue;
+                }
+                Notification::push(
+                    (int)$recipientId,
+                    $type,
+                    $userId,
+                    'post',
+                    $postId,
+                    null,
+                    $url
+                );
+            }
+        }
+
         return $id;
     }
 
@@ -274,5 +315,47 @@ class Post
         }
         db()->prepare('DELETE FROM post_comments WHERE id = ?')->execute([$commentId]);
         return true;
+    }
+
+    // ============================================================
+    // ХЕЛПЕРЫ ДЛЯ УВЕДОМЛЕНИЙ О КОММЕНТАРИЯХ
+    // ============================================================
+
+    /** ID владельца поста (0 если не найдено). */
+    private static function postOwner(int $postId): int
+    {
+        $s = db()->prepare('SELECT user_id FROM posts WHERE id = ? LIMIT 1');
+        $s->execute([$postId]);
+        return (int)($s->fetchColumn() ?: 0);
+    }
+
+    /** Автор конкретного комментария (0 если не найдено). */
+    private static function commentAuthor(int $commentId): int
+    {
+        $s = db()->prepare('SELECT user_id FROM post_comments WHERE id = ? LIMIT 1');
+        $s->execute([$commentId]);
+        return (int)($s->fetchColumn() ?: 0);
+    }
+
+    /**
+     * Уникальные пользователи, которые уже комментировали этот пост,
+     * кроме автора нового комментария.
+     *
+     * @return array<int,bool>  user_id => true
+     */
+    private static function commentParticipants(int $postId, int $excludeUserId): array
+    {
+        $s = db()->prepare(
+            'SELECT DISTINCT user_id
+             FROM post_comments
+             WHERE post_id = ? AND user_id <> ?'
+        );
+        $s->execute([$postId, $excludeUserId]);
+
+        $out = [];
+        foreach ($s->fetchAll(PDO::FETCH_COLUMN) as $uid) {
+            $out[(int)$uid] = true;
+        }
+        return $out;
     }
 }
