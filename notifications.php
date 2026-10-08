@@ -77,8 +77,12 @@ if (!function_exists('notif_text')) {
         return match ($n['type']) {
             'like'              => $actor . ' оценил вашу активность',
             'comment'           => $actor . ' оставил комментарий',
+            'comment_reply'     => $actor . ' ответил на ваш комментарий',
             'follow'            => $actor . ' подписался на вас',
             'mention'           => $actor . ' упомянул вас',
+            'post_like'          => $actor . ' оценил вашу запись',
+            'post_comment'       => $actor . ' оставил комментарий к записи',
+            'post_comment_reply' => $actor . ' ответил на ваш комментарий к записи',
             'segment_lost_lead' => $actor . ' обошёл вас на сегменте',
             'segment_new_lead'  => 'Вы вышли на <strong>1-е место</strong> на сегменте',
             'club_join'         => e($message !== '' ? $message : ($actor . ' вступил в клуб')),
@@ -97,6 +101,10 @@ if (!function_exists('notif_icon')) {
         return match ($type) {
             'like'              => ['♥',  'like'],
             'comment'           => ['💬', 'comment'],
+            'comment_reply'     => ['↩️', 'comment'],
+            'post_like'          => ['♥',  'like'],
+            'post_comment'       => ['💬', 'comment'],
+            'post_comment_reply' => ['↩️', 'comment'],
             'follow'            => ['👤', 'follow'],
             'mention'           => ['@',  'mention'],
             'segment_lost_lead' => ['🥈', 'lost'],
@@ -148,6 +156,13 @@ if (!function_exists('notif_url')) {
         if (!empty($n['username'])) {
             return url('profile.php?u=' . urlencode((string)$n['username']));
         }
+        
+        if ($targetType === 'club_event' && $targetId > 0) {
+            return url('club-event.php?id=' . $targetId);
+}
+
+
+
         return url('notifications.php');
     }
 }

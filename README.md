@@ -14,7 +14,6 @@ MVP на чистом **PHP 8.1+** и **MySQL 8.0+**, без фреймворк�
 4. [Структура проекта](#структура-проекта)
    - [Корень проекта](#корень-проекта)
    - [API](#api)
-   - [Admin](#admin)
    - [Config](#config)
    - [Includes](#includes)
    - [Models](#models)
@@ -68,13 +67,6 @@ MVP на чистом **PHP 8.1+** и **MySQL 8.0+**, без фреймворк�
    mysql -u root -p -e "CREATE DATABASE pulse CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
    mysql -u root -p pulse < sql/schema.sql
    ```
-   
-   При необходимости примените дополнительные схемы:
-   ```bash
-   mysql -u root -p pulse < sql/clubs_schema.sql
-   mysql -u root -p pulse < sql/admin_schema.sql
-   mysql -u root -p pulse < sql/game_schema.sql
-   ```
 
 4. Настройте `config/config.php` (см. следующий раздел).
 
@@ -84,12 +76,7 @@ MVP на чистом **PHP 8.1+** и **MySQL 8.0+**, без фреймворк�
    chown -R www-data:www-data uploads storage
    ```
 
-6. Создайте первого администратора:
-   ```bash
-   php admin/bin/create-admin.php admin@example.com admin secret123 super
-   ```
-
-7. Откройте проект в браузере: `https://your-domain/pulse/`.
+6. Откройте проект в браузере: `https://your-domain/pulse/`.
 
 ---
 
@@ -154,6 +141,7 @@ return [
 | `forgot-password.php` | Форма «забыли пароль». Генерирует токен `password_reset`, отправляет письмо со ссылкой. |
 | `reset-password.php` | Форма установки нового пароля по токену из письма. Проверяет `token_hash`, `expires_at`, `used_at`. |
 | `verify-email.php` | Обрабатывает ссылку из письма подтверждения. Проверяет токен `email_verify`, ставит `users.email_verified = 1`. |
+| `test-mail.php` | Отладочный скрипт для проверки работы SMTP. **Удалите или закройте доступ в продакшене.** |
 
 #### Лента и посты
 
@@ -170,7 +158,6 @@ return [
 | Файл | Назначение |
 |---|---|
 | `activity.php` | Просмотр одной активности: карта Leaflet, статистика, фото с лайтбоксом, комментарии, лайк, кнопка «Кто лайкнул» (модалка), экспорт в GPX/TCX. |
-| `activity-create.php` | Ручное добавление тренировки без файла. |
 | `activity-upload.php` | Массовая загрузка GPX/TCX/FIT. Парсинг, сохранение трека, статистика. Возможность сразу привязать к инвентарю, загрузить фото. |
 | `activity-edit.php` | Редактирование активности: заголовок, описание, тип, видимость, привязка к инвентарю, добавление/удаление фото. Опасная зона для удаления. |
 | `gear.php` | Инвентарь пользователя: велосипеды, кроссовки, лыжи. Учёт пробега, износа, добавление/редактирование, привязка к активностям. |
@@ -195,46 +182,23 @@ return [
 | `segments.php` | Каталог сегментов. Фильтры по типу, лидерборд. |
 | `segment.php` | Просмотр сегмента: карта, лидерборд, форма добавления результата вручную, блок «мой результат». |
 | `segment-create.php` | Создание сегмента на основе существующей активности: выделение участка трека, сохранение. |
-| `segment-edit.php` | Редактирование сегмента. |
-
-#### Клубы
-
-| Файл | Назначение |
-|---|---|
-| `clubs.php` | Каталог публичных клубов. Фильтры по виду спорта, городу. |
-| `club.php` | Страница клуба: стена, активности, события, участники. |
-| `club-create.php` | Создание нового клуба. |
-| `club-edit.php` | Настройки клуба: название, описание, аватар, обложка. |
-| `club-join.php` | Вступление в клуб по ссылке-приглашению. |
-| `club-members.php` | Список участников клуба с ролями. |
-| `club-events.php` | Каталог событий клуба. |
-| `club-event.php` | Просмотр одного события. |
-| `club-event-create.php` | Создание события. |
-| `club-event-edit.php` | Редактирование события. |
 
 #### Календарь и статистика
 
 | Файл | Назначение |
 |---|---|
 | `calendar.php` | Годовой календарь активностей в стиле GitHub-heatmap: streak, недельная/месячная/годовая статистика, график по 12 неделям, распределение по типам. |
-| `heatmap.php` | Глобальная тепловая карта активностей сообщества. |
-| `about.php` | Информация о проекте. |
-| `privacy.php` | Политика конфиденциальности. |
-| `terms.php` | Условия использования. |
 
 #### Служебное
 
 | Файл | Назначение |
 |---|---|
 | `resize-existing.php` | Утилита для пересжатия уже загруженных фото. Одноразовый скрипт для миграции. |
-| `wahoo-connect.php` | Подключение аккаунта Wahoo. |
-| `wahoo-callback.php` | OAuth callback от Wahoo. |
-| `wahoo-disconnect.php` | Отключение Wahoo. |
-| `wahoo-sync.php` | Синхронизация тренировок из Wahoo. |
 | `.htaccess` | Apache-конфиг: защита `config/`, красивые URL для API (`/api/likes` → `/api/likes.php`). |
 | `README.md` | Этот файл. |
 | `composer.json` | Зависимости проекта: PHPMailer. |
 | `composer.lock` | Фиксация версий зависимостей. |
+| `composer.phar` | Локальный Composer для установки без глобальной установки. |
 
 ---
 
@@ -250,72 +214,13 @@ return [
 | `feed.php` | Единая лента (активности + посты) для мобильного клиента. Объединяет две таблицы через UNION, отдаёт готовые структуры с комментариями, фото, лайками. |
 | `activities.php` | GET — список активностей пользователя. POST — создание активности без файла (программно). |
 | `activity.php` | GET — одна активность + её трек + комментарии. |
-| `upload-activity.php` | POST — загрузка GPX/TCX/FIT с парсингом (для мобильного клиента). |
+| `upload-activity.php` | POST — загрузка GPX/TCX с парсингом (для мобильного клиента). |
 | `like.php` | POST — поставить/снять лайк активности. Возвращает `{ liked, count }`. |
 | `comment.php` | POST — добавить комментарий к активности. Возвращает данные комментария + новый count. |
 | `post-like.php` | POST — поставить/снять лайк посту. |
 | `post-comment.php` | POST — добавить комментарий к посту. |
 | `post-photo-delete.php` | POST — удалить фото поста (только владелец). |
 | `activity-photo-delete.php` | POST — удалить фото активности (только владелец). |
-| `activity-likers.php` | GET — список пользователей, лайкнувших активность. |
-| `save-post.php` | POST — сохранить/обновить пост. |
-| `add-activity-photo.php` | POST — загрузить фото к активности. |
-| `add-post-photo.php` | POST — загрузить фото к посту. |
-| `update-activity.php` | POST — обновить метаданные активности. |
-| `create-manual-activity.php` | POST — создать активность вручную без файла. |
-| `elevation.php` | POST — получить высоты для точек трека. |
-| `heatmap.php` | GET — точки для глобальной тепловой карты. |
-| `saved-places.php` | CRUD для сохранённых мест. |
-| `wahoo-sync.php` | Синхронизация тренировок Wahoo. |
-| `wahoo-webhook.php` | Webhook от Wahoo. |
-| `club-wall.php` | Список постов на стене клуба. |
-| `club-post.php` | Добавить пост на стену клуба. |
-| `club-post-edit.php` | Редактировать пост. |
-| `club-post-delete.php` | Удалить пост. |
-| `club-member-action.php` | Действия с участниками (принять, отклонить, кикнуть). |
-| `club-invite-create.php` | Создать ссылку-приглашение. |
-| `club-stats.php` | Статистика клуба. |
-| `club-event-delete.php` | Удалить событие. |
-| `stats.php` | Общая статистика (используется в админке). |
-
----
-
-### `admin/`
-
-Админ-панель с собственной авторизацией.
-
-| Файл | Назначение |
-|---|---|
-| `index.php` | Страница входа. |
-| `dashboard.php` | Дашборд с KPI, графиками, последними регистрациями. |
-| `stats.php` | Детальная статистика. |
-| `users.php` | Список пользователей с фильтрами и массовыми операциями. |
-| `user.php` | Карточка пользователя: редактирование, бан, смена пароля. |
-| `activities.php` | Список активностей. |
-| `posts.php` | Список постов. |
-| `segments.php` | Список сегментов. |
-| `clubs.php` | Список клубов. |
-| `club.php` | Карточка клуба. |
-| `gear.php` | Список инвентаря. |
-| `gear-item.php` | Карточка инвентаря. |
-| `broadcasts.php` | Список рассылок. |
-| `broadcast-create.php` | Создание рассылки. |
-| `broadcast-edit.php` | Редактирование рассылки. |
-| `database.php` | Просмотр таблиц БД. |
-| `sql.php` | SQL-консоль. |
-| `admins.php` | Управление администраторами. |
-| `audit.php` | Журнал действий администраторов. |
-| `logout.php` | Выход. |
-| `includes/auth.php` | Авторизация для админки. |
-| `includes/header.php` | Шапка админки. |
-| `includes/footer.php` | Подвал админки. |
-| `includes/helpers.php` | Хелперы админки. |
-| `models/Broadcast.php` | Модель рассылки. |
-| `assets/css/admin.css` | Стили админки. |
-| `assets/js/admin.js` | JS админки. |
-| `api/stats.php` | API для графиков. |
-| `bin/create-admin.php` | CLI-скрипт создания админа. |
-| `sql/admin_schema.sql` | Схема таблиц админки. |
 
 ---
 
@@ -341,9 +246,6 @@ return [
 | `footer.php` | Общий футер. Закрывает `<body>`, подключает `main.js`. |
 | `helpers.php` | Функции-хелперы: `e()` (htmlspecialchars), `url()`, `app_url()`, `config()`, `time_ago()`, `format_distance()`, `format_duration()`, `format_pace()`, `upload_photo()`, `csrf_token()`, `csrf_field()`, `csrf_check()`. |
 | `mailer.php` | Обёртка над PHPMailer: `send_mail()` — единая точка отправки писем (подтверждение email, сброс пароля). |
-| `ImageUploader.php` | Класс для загрузки изображений с ресайзом. |
-| `wahoo-client.php` | Клиент Wahoo API. |
-| `club-activities-block.php` | Блок активностей клуба. |
 
 ---
 
@@ -364,8 +266,6 @@ return [
 | `Segment.php` | Сегменты и попытки | `findById()`, `create()`, `effortsForActivity()`, `leaderboard()`, `personalBest()` |
 | `Notification.php` | Уведомления | `forUser()`, `create()`, `markAsRead()`, `unreadCount()` |
 | `Token.php` | Токены (email/password/api) | `create()`, `verify()`, `markUsed()` |
-| `Club.php` | Клубы | `findById()`, `create()`, `join()`, `members()`, `wallTree()`, `activitiesFeed()` |
-| `ClubEvent.php` | События клубов | `findById()`, `create()`, `listForClub()`, `attendees()` |
 
 ---
 
@@ -379,10 +279,6 @@ return [
 | `TcxParser.php` | Парсит TCX (Garmin Training Center XML). Аналогичный интерфейс. |
 | `FitParser.php` | Парсит бинарный FIT-формат (Garmin). Работает через `bin2hex`/`unpack`. |
 | `SegmentMatcher.php` | Определяет, проходит ли трек активности через заданный сегмент. Считает `elapsed_time_sec`, `matched_distance_m`, `match_quality`. |
-| `AntiCheat.php` | Античит для игрового модуля. |
-| `Geometry.php` | Геометрические функции. |
-| `TerritoryEngine.php` | Движок территорий для игрового модуля. |
-| `TileBuilder.php` | Построение тайлов карты. |
 
 ---
 
@@ -391,10 +287,6 @@ return [
 | Файл | Назначение |
 |---|---|
 | `schema.sql` | Полная схема БД: все `CREATE TABLE` со всеми полями, индексами, внешними ключами. Импортируется один раз при установке. |
-| `clubs_schema.sql` | Схема таблиц клубов. |
-| `admin_schema.sql` | Схема таблиц админки. |
-| `game_schema.sql` | Схема игрового модуля. |
-| `game_rollback.sql` | Откат игрового модуля. |
 
 ---
 
@@ -402,21 +294,8 @@ return [
 
 | Файл | Назначение |
 |---|---|
-| `css/style.css` | Все стили проекта. |
-| `css/clubs.css` | Стили клубов. |
-| `css/heatmap.css` | Стили тепловой карты. |
-| `css/route-editor.css` | Стили редактора маршрутов. |
-| `css/game.css` | Стили игрового модуля. |
-| `js/main.js` | Общий JS: плавный скролл, анимация карточек, мобильное меню, выпадающее меню пользователя. |
-| `js/club.js` | JS для страниц клубов. |
-| `js/create-post.js` | AJAX-создание поста. |
-| `js/edit-activity.js` | Редактирование активности. |
-| `js/heatmap.js` | Тепловая карта. |
-| `js/manual-activity.js` | Ручное создание активности. |
-| `js/route-editor.js` | Редактор маршрутов. |
-| `js/upload-activity.js` | Загрузка активностей. |
-| `js/wahoo-sync.js` | Синхронизация Wahoo. |
-| `js/game-map.js` | Игровая карта. |
+| `css/style.css` | Все стили проекта. Дизайн-токены (цвета, тени, радиусы), сетки, компоненты (кнопки, карточки, формы, модалки, календарь, сегменты, профиль, лента, gear, routes, feed-gallery, lightbox, likers-modal). |
+| `js/main.js` | Общий JS: плавный скролл по якорям, анимация появления карточек, мобильное меню, выпадающее меню пользователя. |
 
 ---
 
@@ -430,10 +309,8 @@ return [
 | `uploads/avatars/` | Аватарки пользователей |
 | `uploads/gear/` | Фото инвентаря |
 | `uploads/posts/` | Фото постов |
-| `uploads/clubs/` | Аватары и обложки клубов |
-| `uploads/events/` | Фото событий |
 
-Папка должна быть доступна на запись.
+Папка должна быть доступна на запись. Прямая отдача файлов — через веб-сервер (или через PHP-скрипт, если требуется разграничение доступа).
 
 ---
 
@@ -443,10 +320,8 @@ return [
 
 | Файл | Назначение |
 |---|---|
-| `storage/mail.log` | Лог отправленных писем. |
-| `storage/uploads.log` | Лог загрузок файлов. |
-| `storage/heatmap.log` | Лог построения тепловой карты. |
-| `storage/wahoo.log` | Лог синхронизации Wahoo. |
+| `storage/mail.log` | Лог отправленных писем (когда SMTP не сработал, письмо пишется сюда). |
+| `storage/uploads.log` | Лог загрузок файлов (для отладки). |
 
 ---
 
@@ -454,11 +329,18 @@ return [
 
 Зависимости Composer. **Не редактируется вручную.**
 
+| Папка | Назначение |
+|---|---|
+| `vendor/autoload.php` | Точка входа автозагрузчика. |
+| `vendor/composer/` | Сгенерированные классы автозагрузки. |
+| `vendor/phpmailer/phpmailer/` | Библиотека PHPMailer. |
+| `vendor/…` | Другие зависимости (если добавлялись). |
+
 ---
 
 ## Схема базы данных
 
-Всего 13+ таблиц. Полное описание — в `sql/schema.sql`.
+Всего 13 таблиц. Полное описание — в `sql/schema.sql`.
 
 ### Пользователи и социальные связи
 
@@ -486,9 +368,9 @@ return [
 
 **`follows`** — подписки. Составной PK `(follower_id, following_id)`.
 
-**`tokens`** — одноразовые токены для email_verify и password_reset.
+**`tokens`** — одноразовые токены для email_verify и password_reset. Хранит `token_hash`, `expires_at`, `used_at`.
 
-**`api_tokens`** — долгоживущие Bearer-токены для мобильного приложения.
+**`api_tokens`** — долгоживущие Bearer-токены для мобильного приложения. Хранит `token_hash`, `expires_at`, `last_used_at`.
 
 ### Активности
 
@@ -510,12 +392,25 @@ return [
 | `gear_id` | int unsigned FK | Привязка к инвентарю |
 | `track_json` | longtext | Точки трека в JSON |
 | `visibility` | enum | `public`, `followers`, `private` |
+| `created_at` | timestamp | Дата создания |
 
-**`activity_likes`**, **`activity_comments`**, **`activity_photos`** — лайки, комментарии, фото.
+**`activity_likes`** — лайки активностей. PK `(user_id, activity_id)`.
+
+**`activity_comments`** — комментарии активностей.
+
+**`activity_photos`** — фото активностей с `order_index`.
 
 ### Посты (блог)
 
-**`posts`** — записи с `title`, `body`, `visibility`.
+**`posts`** — записи.
+
+| Поле | Тип |
+|---|---|
+| `id`, `user_id` | PK, FK |
+| `title` | varchar(190) |
+| `body` | longtext |
+| `visibility` | enum |
+| `created_at`, `updated_at` | timestamp |
 
 **`post_likes`**, **`post_comments`**, **`post_photos`** — аналогично активностям.
 
@@ -525,23 +420,9 @@ return [
 
 **`segments`** — сегменты: `creator_id`, `name`, `type`, `distance_m`, `elevation_gain_m`, `track_json`, `is_public`.
 
-**`segment_efforts`** — попытки прохождения.
+**`segment_efforts`** — попытки прохождения: `segment_id`, `activity_id`, `user_id`, `elapsed_time_sec`, `is_auto`, `matched_distance_m`, `match_quality`, `started_at`.
 
 **`gear`** — инвентарь: `user_id`, `type` (`bike`/`shoes`/`skis`/`other`), `name`, `brand`, `model`, `purchase_date`, `notes`, `photo_url`, `is_retired`.
-
-### Клубы
-
-**`clubs`** — клубы: `name`, `slug`, `description`, `avatar_url`, `cover_url`, `city`, `sport_type`, `visibility`, `join_policy`, `owner_id`, `member_count`.
-
-**`club_members`** — участники: `club_id`, `user_id`, `role` (`owner`/`admin`/`moderator`/`member`), `status` (`active`/`pending`/`banned`).
-
-**`club_posts`** — посты на стене клуба.
-
-**`club_events`** — события клуба.
-
-**`club_event_attendees`** — участники событий.
-
-**`club_invites`** — приглашения.
 
 ### Уведомления
 
@@ -597,13 +478,6 @@ return [
 2. `Follow::follow()` / `Follow::unfollow()` — INSERT/DELETE в `follows`.
 3. `Notification::create()` — уведомление пользователю.
 4. Редирект обратно.
-
-### 7. Синхронизация Wahoo
-
-1. `wahoo-connect.php` — OAuth-авторизация.
-2. `wahoo-callback.php` — получение токена.
-3. `wahoo-sync.php` — загрузка тренировок, парсинг FIT, создание активностей.
-4. Webhook `api/wahoo-webhook.php` — автоматическая синхронизация новых тренировок.
 
 ---
 
@@ -705,7 +579,6 @@ json_ok([...]);         // или json_err('...', 400)
 - **Клубы** — группировка атлетов по интересам/городу.
 - **Сообщения** — личные сообщения между пользователями.
 - **Push-уведомления** — Web Push + FCM для мобильных.
-- **Игровой модуль** — захват территорий по трекам.
 
 ---
 

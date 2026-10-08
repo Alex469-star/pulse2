@@ -5,6 +5,7 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/models/Activity.php';
 require_once __DIR__ . '/models/Post.php';
 require_once __DIR__ . '/models/User.php';
+require_once __DIR__ . '/models/Follow.php';
 require_once __DIR__ . '/models/Segment.php';
 
 // ============================================================
@@ -145,10 +146,6 @@ if (!function_exists('feed_fetch_unified')) {
 }
 
 if (!function_exists('feed_fetch_unified_clubs')) {
-    /**
-     * Единая лента для вкладки «Мои клубы»:
-     * активности и посты участников клубов, в которых состоит пользователь.
-     */
     function feed_fetch_unified_clubs(int $viewerId, string $type, int $limit, int $offset): array
     {
         $aType = ($type !== '') ? $type : '';
@@ -258,12 +255,106 @@ if (!function_exists('feed_format_activity_date')) {
     }
 }
 
+/* ============================================================
+   ДЕРЕВО КОММЕНТАРИЕВ (СЕРВЕРНЫЙ РЕНДЕР)
+   ============================================================ */
+
+if (!function_exists('feed_build_comment_tree')) {
+    function feed_build_comment_tree(array $comments): array
+    {
+        $tree = [];
+        foreach ($comments as $c) {
+            $pid = isset($c['parent_id']) && $c['parent_id'] !== null ? (int)$c['parent_id'] : 0;
+            $tree[$pid][] = $c;
+        }
+        return [$tree, $tree[0] ?? []];
+    }
+}
+
+if (!function_exists('feed_render_comment_node')) {
+    function feed_render_comment_node(string $kind, int $targetId, array $c, array $tree, bool $canReply, int $depth): string
+    {
+        $children = $tree[(int)$c['id']] ?? [];
+        $avatar = !empty($c['avatar_url'])
+            ? '<img src="' . e($c['avatar_url']) . '" alt="">'
+            : e(mb_substr((string)$c['display_name'], 0, 1));
+
+        $replyBtn = $canReply
+            ? '<button type="button" class="comment__reply js-reply-btn" '
+                . 'data-kind="' . e($kind) . '" '
+                . 'data-target-id="' . (int)$targetId . '" '
+                . 'data-comment-id="' . (int)$c['id'] . '" '
+                . 'data-display-name="' . e($c['display_name']) . '" '
+                . 'title="Ответить">↩ Ответить</button>'
+            : '';
+
+        $html  = '<div class="comment ' . ($depth > 0 ? 'comment--reply' : '') . '" '
+               . 'id="' . e($kind) . '-comment-' . (int)$c['id'] . '" '
+               . 'data-comment-id="' . (int)$c['id'] . '">';
+        $html .= '<span class="avatar avatar--sm">' . $avatar . '</span>';
+        $html .= '<div class="comment__body">';
+        $html .= '<div class="comment__head">';
+        $html .= '<a href="' . e(url('profile.php?u=' . urlencode((string)$c['username']))) . '"><strong>' . e($c['display_name']) . '</strong></a>';
+        $html .= '<span class="comment__time muted">' . e(time_ago((string)$c['created_at'])) . '</span>';
+        $html .= $replyBtn;
+        $html .= '</div>';
+        $html .= '<div>' . nl2br(e($c['body'])) . '</div>';
+
+        if ($children) {
+            $html .= '<div class="comment__children">';
+            foreach ($children as $child) {
+                $html .= feed_render_comment_node($kind, $targetId, $child, $tree, $canReply, $depth + 1);
+            }
+            $html .= '</div>';
+        }
+
+        $html .= '</div></div>';
+        return $html;
+    }
+}
+
+if (!function_exists('feed_render_comments')) {
+    function feed_render_comments(string $kind, int $targetId, array $comments, bool $canReply): string
+    {
+        if (!$comments) return '';
+        [$tree, $roots] = feed_build_comment_tree($comments);
+        if (!$roots) return '';
+
+        $wrapperClass = $kind === 'post' ? 'post-card__comments' : 'activity-card__comments';
+        $html = '<div class="' . $wrapperClass . '">';
+        foreach ($roots as $c) {
+            $html .= feed_render_comment_node($kind, $targetId, $c, $tree, $canReply, 0);
+        }
+        $html .= '</div>';
+        return $html;
+    }
+}
+
 // ============================================================
 // ОСНОВНАЯ ЛОГИКА
 // ============================================================
 
 auth_start();
 $me = require_login();
+
+// ---- POST: подписка из рекомендаций ----
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $me) {
+    csrf_check($_POST['csrf'] ?? null);
+    $action = $_POST['action'] ?? '';
+
+    if ($action === 'follow_suggestion' && !empty($_POST['target_id'])) {
+        $targetId = (int)$_POST['target_id'];
+        if ($targetId > 0 && $targetId !== (int)$me['id']) {
+            try {
+                Follow::follow((int)$me['id'], $targetId);
+                flash('Вы подписались', 'success');
+            } catch (Throwable $e) {
+                flash('Ошибка: ' . $e->getMessage(), 'error');
+            }
+        }
+        redirect(url('feed.php'));
+    }
+}
 
 $tab  = (string)($_GET['tab'] ?? 'all');
 $type = (string)($_GET['type'] ?? '');
@@ -274,7 +365,7 @@ if (!in_array($tab, $allowedTabs, true)) $tab = 'all';
 $allowedTypes = ['', 'run', 'ride', 'swim', 'ski', 'walk', 'hike', 'other'];
 if (!in_array($type, $allowedTypes, true)) $type = '';
 
-$limit = 50;
+$limit = 20;
 $rows = [];
 $error = null;
 
@@ -371,14 +462,32 @@ foreach ($effortsByActivity as $aid => $list) {
     $effortCounts[$aid] = $cnt;
 }
 
-$myStats = ['activities' => 0, 'distance_m' => 0];
+// ---- Мои счётчики ----
+$myStats = ['activities' => 0, 'distance_m' => 0, 'followers' => 0, 'following' => 0];
 try {
     $stats = User::stats((int)$me['id']);
     $myStats['activities'] = (int)($stats['activities'] ?? 0);
     $myStats['distance_m'] = (float)($stats['distance_m'] ?? 0);
+    $myStats['followers']  = (int)($stats['followers'] ?? 0);
+    $myStats['following']  = (int)($stats['following'] ?? 0);
 } catch (Throwable $e) {}
+// ---- Последняя активность пользователя ----
+$lastActivity = null;
+try {
+    $stmt = db()->prepare(
+        'SELECT id, title, type, started_at, created_at
+         FROM activities
+         WHERE user_id = ?
+         ORDER BY COALESCE(started_at, created_at) DESC, id DESC
+         LIMIT 1'
+    );
+    $stmt->execute([(int)$me['id']]);
+    $lastActivity = $stmt->fetch() ?: null;
+} catch (Throwable $e) {
+    $lastActivity = null;
+}
 
-// ---- Мои клубы (для левой колонки) ----
+// ---- Мои клубы (левая колонка) ----
 $myClubs = [];
 $myClubsCount = 0;
 try {
@@ -404,6 +513,67 @@ try {
 } catch (Throwable $e) {
     $myClubs = [];
     $myClubsCount = 0;
+}
+
+// ---- Клубы для правой колонки (все, а не только 8) ----
+$allMyClubs = [];
+try {
+    $stmt = db()->prepare(
+        'SELECT c.id, c.name, c.slug, c.avatar_url
+           FROM club_members m
+           JOIN clubs c ON c.id = m.club_id
+          WHERE m.user_id = ? AND m.status = "active" AND c.is_banned = 0
+       ORDER BY FIELD(m.role, "owner","admin","moderator","member"),
+                m.joined_at DESC'
+    );
+    $stmt->execute([(int)$me['id']]);
+    $allMyClubs = $stmt->fetchAll();
+} catch (Throwable $e) {
+    $allMyClubs = [];
+}
+
+// ============================================================
+// КАЛЕНДАРЬ АКТИВНОСТЕЙ ЗА ТЕКУЩИЙ МЕСЯЦ
+// ============================================================
+$calendarDays = [];
+$calendarYear  = (int)date('Y');
+$calendarMonth = (int)date('n');
+
+try {
+    $stmt = db()->prepare(
+        "SELECT DATE(COALESCE(started_at, created_at)) AS day, COUNT(*) AS cnt
+         FROM activities
+         WHERE user_id = ?
+           AND YEAR(COALESCE(started_at, created_at)) = ?
+           AND MONTH(COALESCE(started_at, created_at)) = ?
+         GROUP BY day"
+    );
+    $stmt->execute([(int)$me['id'], $calendarYear, $calendarMonth]);
+    foreach ($stmt->fetchAll() as $row) {
+        $calendarDays[(string)$row['day']] = (int)$row['cnt'];
+    }
+} catch (Throwable $e) {
+    $calendarDays = [];
+}
+
+// ============================================================
+// ТОП СПОРТСМЕНОВ СРЕДИ ПОДПИСОК (30 дней)
+// ============================================================
+$topAthletes = [];
+try {
+    $topAthletes = User::topAthletesFor((int)$me['id'], 30, 5);
+} catch (Throwable $e) {
+    $topAthletes = [];
+}
+
+// ============================================================
+// РЕКОМЕНДАЦИИ ПОДПИСОК
+// ============================================================
+$suggestedUsers = [];
+try {
+    $suggestedUsers = User::suggestedFor((int)$me['id'], 5);
+} catch (Throwable $e) {
+    $suggestedUsers = [];
 }
 
 $hasMore = count($rows) === $limit;
@@ -488,17 +658,57 @@ window.__CSRF__ = {$csrfJson};
     function esc(s) {
         return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/\\x27/g,"&#39;");
     }
-    function buildCommentsHtml(comments, kind) {
+
+    function buildCommentNode(c, tree, kind, targetId, depth) {
+        var children = tree[c.id] || [];
+        var av = c.avatar_url ? "<img src=\\"" + esc(c.avatar_url) + "\\" alt=\\"\\">" : esc(c.initial || "?");
+        var replyBtn = "<button type=\\"button\\" class=\\"comment__reply js-reply-btn\\" " +
+            "data-kind=\\"" + esc(kind) + "\\" " +
+            "data-target-id=\\"" + targetId + "\\" " +
+            "data-comment-id=\\"" + c.id + "\\" " +
+            "data-display-name=\\"" + esc(c.display_name) + "\\" " +
+            "title=\\"Ответить\\">↩ Ответить</button>";
+
+        var html = "<div class=\\"comment " + (depth > 0 ? "comment--reply" : "") + "\\" " +
+            "id=\\"" + esc(kind) + "-comment-" + c.id + "\\" " +
+            "data-comment-id=\\"" + c.id + "\\">" +
+            "<span class=\\"avatar avatar--sm\\">" + av + "</span>" +
+            "<div class=\\"comment__body\\">" +
+                "<div class=\\"comment__head\\">" +
+                    "<a href=\\"" + esc(c.profile_url) + "\\"><strong>" + esc(c.display_name) + "</strong></a>" +
+                    "<span class=\\"comment__time muted\\">" + esc(c.time_ago) + "</span>" +
+                    replyBtn +
+                "</div>" +
+                "<div>" + esc(c.body).replace(/\\n/g, "<br>") + "</div>";
+
+        if (children.length) {
+            html += "<div class=\\"comment__children\\">";
+            children.forEach(function (ch) { html += buildCommentNode(ch, tree, kind, targetId, depth + 1); });
+            html += "</div>";
+        }
+
+        html += "</div></div>";
+        return html;
+    }
+
+    function buildCommentsHtml(comments, kind, targetId) {
         if (!comments || !comments.length) return "";
+
+        var tree = {};
+        comments.forEach(function (c) {
+            var pid = (c.parent_id != null) ? parseInt(c.parent_id, 10) : 0;
+            if (!tree[pid]) tree[pid] = [];
+            tree[pid].push(c);
+        });
+        var roots = tree[0] || [];
+        if (!roots.length) return "";
+
         var cls = kind === "activity" ? "activity-card__comments" : "post-card__comments";
         var out = "<div class=\\"" + cls + "\\">";
-        comments.forEach(function (c) {
-            var av = c.avatar_url ? "<img src=\\"" + esc(c.avatar_url) + "\\" alt=\\"\\">" : esc(c.initial);
-            var del = c.can_delete ? "<form method=\\"post\\" style=\\"display:inline\\" onsubmit=\\"return confirm(\\"Удалить?\\")\\"><input type=\\"hidden\\" name=\\"csrf\\" value=\\"" + CSRF + "\\"><input type=\\"hidden\\" name=\\"action\\" value=\\"delete_comment\\"><input type=\\"hidden\\" name=\\"comment_id\\" value=\\"" + c.id + "\\"><button class=\\"comment__delete\\">×</button></form>" : "";
-            out += "<div class=\\"comment\\"><span class=\\"avatar avatar--sm\\">" + av + "</span><div class=\\"comment__body\\"><div class=\\"comment__head\\"><a href=\\"" + esc(c.profile_url) + "\\"><strong>" + esc(c.display_name) + "</strong></a><span class=\\"comment__time muted\\">" + esc(c.time_ago) + "</span>" + del + "</div><div>" + esc(c.body).replace(/\\n/g,"<br>") + "</div></div></div>";
-        });
+        roots.forEach(function (c) { out += buildCommentNode(c, tree, kind, targetId, 0); });
         return out + "</div>";
     }
+
     function buildActivityGallery(photos) {
         if (!photos || !photos.length) return "";
         var html = "<div class=\\"feed-gallery\\" data-gallery><div class=\\"feed-gallery__track\\">";
@@ -514,6 +724,7 @@ window.__CSRF__ = {$csrfJson};
         html += "</div>";
         return html;
     }
+
     function buildEffortsHtml(a) {
         if (!a.effort_count || a.effort_count <= 0) return "";
         var json = JSON.stringify(a.efforts || []);
@@ -529,6 +740,17 @@ window.__CSRF__ = {$csrfJson};
             "</button>" +
         "</div>";
     }
+
+    function buildCommentForm(kind, targetId) {
+        return "<form class=\\"comment-form js-comment-form\\" data-kind=\\"" + esc(kind) + "\\" data-id=\\"" + targetId + "\\" data-parent-id=\\"\\">" +
+            "<div class=\\"comment-form__reply-hint\\" hidden>" +
+                "<button type=\\"button\\" class=\\"comment-form__reply-cancel js-reply-cancel\\" aria-label=\\"Отменить ответ\\">×</button>" +
+            "</div>" +
+            "<input type=\\"text\\" name=\\"body\\" placeholder=\\"Написать комментарий...\\" required maxlength=\\"1000\\">" +
+            "<button type=\\"submit\\">Отправить</button>" +
+        "</form>";
+    }
+
     function buildActivityHtml(a) {
         var track = (a.track && a.track.length >= 2) ? "<a href=\\"" + a.url + "\\" class=\\"activity-card__map-link\\"><div class=\\"feed-map\\" data-activity-id=\\"" + a.id + "\\" data-initialized=\\"0\\"></div></a>" : "";
         var desc = (a.description && a.description.length) ? "<div class=\\"activity-card__description\\">" + esc(a.description).replace(/\\n/g,"<br>") + "</div>" : "";
@@ -564,10 +786,11 @@ window.__CSRF__ = {$csrfJson};
                 "<a class=\\"action\\" href=\\"" + a.url + "#comments\\"><span class=\\"action__icon\\">💬</span><span class=\\"js-comment-count\\">" + a.comments_count + "</span></a>" +
                 "<a class=\\"action\\" href=\\"" + a.url + "\\"><span class=\\"action__icon\\">🔗</span><span>Открыть</span></a>" +
             "</div>" +
-            buildCommentsHtml(a.comments, "activity") +
-            "<form class=\\"comment-form js-comment-form\\" data-kind=\\"activity\\" data-id=\\"" + a.id + "\\"><input type=\\"text\\" name=\\"body\\" placeholder=\\"Написать комментарий...\\" required maxlength=\\"1000\\"><button type=\\"submit\\">Отправить</button></form>" +
+            buildCommentsHtml(a.comments, "activity", a.id) +
+            buildCommentForm("activity", a.id) +
         "</article>";
     }
+
     function buildPostHtml(p) {
         var photos = "";
         if (p.photos && p.photos.length) {
@@ -593,10 +816,11 @@ window.__CSRF__ = {$csrfJson};
                 "<a class=\\"action\\" href=\\"" + p.url + "#comments\\"><span class=\\"action__icon\\">💬</span><span class=\\"js-comment-count\\">" + p.comments_count + "</span></a>" +
                 "<a class=\\"action\\" href=\\"" + p.url + "\\"><span class=\\"action__icon\\">📖</span><span>Читать</span></a>" +
             "</div>" +
-            buildCommentsHtml(p.comments, "post") +
-            "<form class=\\"comment-form js-comment-form\\" data-kind=\\"post\\" data-id=\\"" + p.id + "\\"><input type=\\"text\\" name=\\"body\\" placeholder=\\"Написать комментарий...\\" required maxlength=\\"1000\\"><button type=\\"submit\\">Отправить</button></form>" +
+            buildCommentsHtml(p.comments, "post", p.id) +
+            buildCommentForm("post", p.id) +
         "</article>";
     }
+
     function loadMore() {
         if (loading || !hasMore) return;
         loading = true;
@@ -667,23 +891,34 @@ window.__CSRF__ = {$csrfJson};
 (function () {
     "use strict";
     var ACT = window.__API_COMMENT_ACT__, POST = window.__API_COMMENT_POST__, CSRF = window.__CSRF__;
+
     function post(url, data) {
         return fetch(url, { method:"POST", credentials:"same-origin", headers:{"Content-Type":"application/json","X-CSRF-Token":CSRF,"Accept":"application/json"}, body: JSON.stringify(data) })
             .then(function (r) { return r.json().then(function (b) { return { ok: r.ok, body: b }; }); });
     }
     function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/\\x27/g,"&#39;"); }
+
     document.addEventListener("submit", function (e) {
         var form = e.target.closest(".js-comment-form");
         if (!form) return;
         e.preventDefault();
+
         var kind = form.dataset.kind, id = form.dataset.id;
+        var parentId = form.dataset.parentId ? parseInt(form.dataset.parentId, 10) : null;
+        if (parentId !== null && isNaN(parentId)) parentId = null;
+
         var input = form.querySelector("input, textarea");
         var body = input.value.trim();
         if (!body) return;
+
         var submitBtn = form.querySelector("button[type=submit]");
         if (submitBtn) submitBtn.disabled = true;
+
         var url = kind === "post" ? POST : ACT;
-        var payload = kind === "post" ? { post_id: id, body: body } : { activity_id: id, body: body };
+        var payload = kind === "post"
+            ? { post_id: id, body: body, parent_id: parentId }
+            : { activity_id: id, body: body, parent_id: parentId };
+
         post(url, payload)
             .then(function (res) {
                 if (!res.ok || !res.body.ok) { alert(res.body.error || "Ошибка"); return; }
@@ -696,15 +931,110 @@ window.__CSRF__ = {$csrfJson};
                     container.className = cls;
                     form.parentNode.insertBefore(container, form);
                 }
+
                 var av = c.avatar_url ? "<img src=\\"" + esc(c.avatar_url) + "\\" alt=\\"\\">" : esc(c.initial);
-                container.insertAdjacentHTML("beforeend",
-                    "<div class=\\"comment\\"><span class=\\"avatar avatar--sm\\">" + av + "</span><div class=\\"comment__body\\"><div class=\\"comment__head\\"><a href=\\"" + esc(c.profile_url) + "\\"><strong>" + esc(c.display_name) + "</strong></a><span class=\\"comment__time muted\\">" + esc(c.time_ago) + "</span></div><div>" + esc(c.body).replace(/\\n/g,"<br>") + "</div></div></div>");
+                var replyBtn = "<button type=\\"button\\" class=\\"comment__reply js-reply-btn\\" " +
+                    "data-kind=\\"" + esc(kind) + "\\" " +
+                    "data-target-id=\\"" + id + "\\" " +
+                    "data-comment-id=\\"" + c.id + "\\" " +
+                    "data-display-name=\\"" + esc(c.display_name) + "\\" " +
+                    "title=\\"Ответить\\">↩ Ответить</button>";
+
+                var commentHtml =
+                    "<div class=\\"comment " + (c.parent_id ? "comment--reply" : "") + "\\" " +
+                        "id=\\"" + esc(kind) + "-comment-" + c.id + "\\" " +
+                        "data-comment-id=\\"" + c.id + "\\">" +
+                        "<span class=\\"avatar avatar--sm\\">" + av + "</span>" +
+                        "<div class=\\"comment__body\\">" +
+                            "<div class=\\"comment__head\\">" +
+                                "<a href=\\"" + esc(c.profile_url) + "\\"><strong>" + esc(c.display_name) + "</strong></a>" +
+                                "<span class=\\"comment__time muted\\">" + esc(c.time_ago) + "</span>" +
+                                replyBtn +
+                            "</div>" +
+                            "<div>" + esc(c.body).replace(/\\n/g, "<br>") + "</div>" +
+                        "</div>" +
+                    "</div>";
+
+                if (c.parent_id) {
+                    var parentEl = card.querySelector(".comment[data-comment-id=\\"" + c.parent_id + "\\"]");
+                    if (parentEl) {
+                        var childrenWrap = parentEl.querySelector(":scope > .comment__body > .comment__children");
+                        if (!childrenWrap) {
+                            childrenWrap = document.createElement("div");
+                            childrenWrap.className = "comment__children";
+                            parentEl.querySelector(":scope > .comment__body").appendChild(childrenWrap);
+                        }
+                        childrenWrap.insertAdjacentHTML("beforeend", commentHtml);
+                    } else {
+                        container.insertAdjacentHTML("beforeend", commentHtml);
+                    }
+                } else {
+                    container.insertAdjacentHTML("beforeend", commentHtml);
+                }
+
                 var counter = card.querySelector(".js-comment-count");
                 if (counter) counter.textContent = res.body.data.count;
+
                 input.value = "";
+
+                form.dataset.parentId = "";
+                var hint = form.querySelector(".comment-form__reply-hint");
+                if (hint) hint.hidden = true;
+                input.placeholder = "Написать комментарий...";
             })
             .catch(function () { alert("Ошибка отправки"); })
             .finally(function () { if (submitBtn) submitBtn.disabled = false; });
+    });
+})();
+
+(function () {
+    "use strict";
+
+    document.addEventListener("click", function (e) {
+        var btn = e.target.closest(".js-reply-btn");
+        if (!btn) return;
+        e.preventDefault();
+
+        var kind = btn.dataset.kind;
+        var targetId = btn.dataset.targetId;
+        var commentId = btn.dataset.commentId;
+        var displayName = btn.dataset.displayName || "";
+
+        var card = btn.closest(".activity-card, .post-card");
+        if (!card) return;
+
+        var form = card.querySelector(".js-comment-form[data-kind=\\"" + kind + "\\"][data-id=\\"" + targetId + "\\"]");
+        if (!form) return;
+
+        form.dataset.parentId = commentId;
+
+        var hint = form.querySelector(".comment-form__reply-hint");
+        var nameEl = form.querySelector(".js-reply-name");
+        if (hint && nameEl) {
+            nameEl.textContent = displayName;
+            hint.hidden = false;
+        }
+
+        var input = form.querySelector("input, textarea");
+        if (input) {
+            input.focus();
+            input.placeholder = "Ответ " + displayName + "...";
+        }
+    });
+
+    document.addEventListener("click", function (e) {
+        var cancel = e.target.closest(".js-reply-cancel");
+        if (!cancel) return;
+        e.preventDefault();
+
+        var form = cancel.closest(".js-comment-form");
+        if (!form) return;
+
+        form.dataset.parentId = "";
+        var hint = form.querySelector(".comment-form__reply-hint");
+        if (hint) hint.hidden = true;
+        var input = form.querySelector("input, textarea");
+        if (input) input.placeholder = "Написать комментарий...";
     });
 })();
 
@@ -762,7 +1092,6 @@ window.__CSRF__ = {$csrfJson};
     }
 })();
 
-/* ЛАЙТБОКС */
 (function () {
     "use strict";
     if (!document.getElementById("feed-lightbox")) {
@@ -848,7 +1177,6 @@ window.__CSRF__ = {$csrfJson};
     });
 })();
 
-/* МОДАЛКА УСИЛИЙ */
 (function () {
     "use strict";
 
@@ -978,99 +1306,147 @@ window.__CSRF__ = {$csrfJson};
         open(efforts);
     });
 })();
+
+/* Клубы в правой колонке — Развернуть/Свернуть */
+(function () {
+    var btn = document.getElementById("rightbar-clubs-toggle");
+    var wrap = document.getElementById("rightbar-clubs");
+    if (!btn || !wrap) return;
+
+    btn.addEventListener("click", function () {
+        var hidden = wrap.querySelectorAll(".rightbar-club.is-hidden");
+        if (hidden.length) {
+            hidden.forEach(function (el) { el.classList.remove("is-hidden"); });
+            btn.textContent = "Свернуть";
+        } else {
+            var all = wrap.querySelectorAll(".rightbar-club");
+            all.forEach(function (el, i) {
+                if (i >= 10) el.classList.add("is-hidden");
+            });
+            btn.textContent = "Развернуть";
+        }
+    });
+})();
 JS;
 
 require __DIR__ . '/includes/header.php';
 ?>
 
 <div class="feed-layout">
+
+    <!-- ============================================================
+         ЛЕВАЯ КОЛОНКА
+         ============================================================ -->
     <aside class="feed-sidebar">
-        <div class="sidebar-card sidebar-card--user">
-            <a href="<?= e(url('profile.php?u=' . urlencode((string)$me['username']))) ?>" class="sidebar-user">
-                <span class="sidebar-user__avatar">
-                    <?php if (!empty($me['avatar_url'])): ?>
-                        <img src="<?= e($me['avatar_url']) ?>" alt="">
-                    <?php else: ?>
-                        <?= e(mb_substr((string)$me['display_name'], 0, 1)) ?>
-                    <?php endif; ?>
-                </span>
-                <span class="sidebar-user__info">
-                    <span class="sidebar-user__name"><?= e($me['display_name']) ?></span>
-                    <span class="sidebar-user__meta">@<?= e($me['username']) ?></span>
-                </span>
-            </a>
-            <div class="sidebar-user__stats">
-                <a href="<?= e(url('profile.php?u=' . urlencode((string)$me['username']))) ?>" class="sidebar-user__stat">
-                    <span class="sidebar-user__stat-value"><?= (int)$myStats['activities'] ?></span>
-                    <span class="sidebar-user__stat-label">Активностей</span>
-                </a>
-                <a href="<?= e(url('profile.php?u=' . urlencode((string)$me['username']))) ?>" class="sidebar-user__stat">
-                    <span class="sidebar-user__stat-value"><?= e(format_distance($myStats['distance_m'])) ?></span>
-                    <span class="sidebar-user__stat-label">Всего</span>
-                </a>
-            </div>
-        </div>
 
-        <!-- ============ МОИ КЛУБЫ ============ -->
-        <div class="sidebar-card sidebar-card--clubs">
-            <h3 class="sidebar-card__title">
-                Мои клубы
-                <?php if ($myClubsCount > 0): ?>
-                    <span class="sidebar-card__count"><?= (int)$myClubsCount ?></span>
-                <?php endif; ?>
-            </h3>
+        <!-- Блок пользователя -->
+<div class="sidebar-card sidebar-card--user2">
 
-            <?php if (!$myClubs): ?>
-                <p class="sidebar-clubs__empty muted">
-                    Вы пока не состоите ни в одном клубе.
-                </p>
-                <a href="<?= e(url('clubs.php')) ?>" class="sidebar-clubs__cta">Найти клуб →</a>
+    <a href="<?= e(url('profile.php?u=' . urlencode((string)$me['username']))) ?>" class="sidebar-user2__avatar-link">
+        <span class="sidebar-user2__avatar">
+            <?php if (!empty($me['avatar_url'])): ?>
+                <img src="<?= e($me['avatar_url']) ?>" alt="">
             <?php else: ?>
-                <div class="sidebar-clubs">
-                    <?php foreach ($myClubs as $c): ?>
-                        <a class="sidebar-club"
-                           href="<?= e(url('club.php?slug=' . urlencode((string)$c['slug']))) ?>"
-                           title="<?= e($c['name']) ?>">
-                            <span class="sidebar-club__avatar">
-                                <?php if (!empty($c['avatar_url'])): ?>
-                                    <img src="<?= e($c['avatar_url']) ?>" alt="">
+                <?= e(mb_substr((string)$me['display_name'], 0, 1)) ?>
+            <?php endif; ?>
+        </span>
+    </a>
+
+    <a href="<?= e(url('profile.php?u=' . urlencode((string)$me['username']))) ?>" class="sidebar-user2__name">
+        <?= e($me['display_name']) ?>
+    </a>
+
+    <div class="sidebar-user2__stats">
+        <a href="<?= e(url('profile-following.php?u=' . urlencode((string)$me['username']))) ?>" class="sidebar-user2__stat">
+            <span class="sidebar-user2__stat-label">Подписки</span>
+            <span class="sidebar-user2__stat-value"><?= (int)$myStats['following'] ?></span>
+        </a>
+        <a href="<?= e(url('profile-followers.php?u=' . urlencode((string)$me['username']))) ?>" class="sidebar-user2__stat">
+            <span class="sidebar-user2__stat-label">Подписчики</span>
+            <span class="sidebar-user2__stat-value"><?= (int)$myStats['followers'] ?></span>
+        </a>
+        <a href="<?= e(url('profile.php?u=' . urlencode((string)$me['username']))) ?>" class="sidebar-user2__stat">
+            <span class="sidebar-user2__stat-label">Тренировки</span>
+            <span class="sidebar-user2__stat-value"><?= number_format((int)$myStats['activities'], 0, '.', ' ') ?></span>
+        </a>
+    </div>
+
+    <?php if (!empty($lastActivity)): ?>
+        <div class="sidebar-user2__last">
+            <div class="sidebar-user2__last-label">Последняя тренировка</div>
+            <a class="sidebar-user2__last-title" href="<?= e(url('activity.php?id=' . (int)$lastActivity['id'])) ?>">
+                <?= e($lastActivity['title']) ?> <span class="sidebar-user2__dot">·</span>
+                <?= e(date('d.m.Y', strtotime((string)($lastActivity['started_at'] ?? $lastActivity['created_at'])))) ?>
+            </a>
+        </div>
+    <?php endif; ?>
+
+
+<!-- Мини-календарь (отдельной карточкой) -->
+
+    <div class="sidebar-calendar">
+        <div class="sidebar-calendar__head">
+            <?= e(profile_month_ru($calendarMonth)) ?> <?= (int)$calendarYear ?>
+        </div>
+        <div class="sidebar-calendar__grid">
+            <?php
+                $firstDay = mktime(0, 0, 0, $calendarMonth, 1, $calendarYear);
+                $daysInMonth = (int)date('t', $firstDay);
+                $startWeekday = (int)date('N', $firstDay);
+                $today = date('Y-m-d');
+
+                for ($i = 1; $i < $startWeekday; $i++) {
+                    echo '<span class="sidebar-calendar__cell sidebar-calendar__cell--empty"></span>';
+                }
+                for ($d = 1; $d <= $daysInMonth; $d++) {
+                    $date = sprintf('%04d-%02d-%02d', $calendarYear, $calendarMonth, $d);
+                    $has = isset($calendarDays[$date]);
+                    $isToday = ($date === $today);
+                    $cls = 'sidebar-calendar__cell';
+                    if ($has) $cls .= ' is-active';
+                    if ($isToday) $cls .= ' is-today';
+                    echo '<span class="' . $cls . '" title="' . e($date) . '">'
+                        . ($has ? '🔥' : $d)
+                        . '</span>';
+                }
+            ?>
+        </div>
+    </div>
+</div>
+
+        <!-- Топ спортсменов -->
+        <?php if ($topAthletes): ?>
+            <div class="sidebar-card">
+                <h3 class="sidebar-card__title">🏆 Топ спортсменов</h3>
+                <div class="sidebar-athletes">
+                    <?php foreach ($topAthletes as $i => $ta): ?>
+                        <a class="sidebar-athlete" href="<?= e(url('profile.php?u=' . urlencode((string)$ta['username']))) ?>">
+                            <span class="sidebar-athlete__rank"><?= $i + 1 ?></span>
+                            <span class="avatar avatar--sm">
+                                <?php if (!empty($ta['avatar_url'])): ?>
+                                    <img src="<?= e($ta['avatar_url']) ?>" alt="">
                                 <?php else: ?>
-                                    <?= e(mb_substr((string)$c['name'], 0, 1)) ?>
+                                    <?= e(mb_substr((string)$ta['display_name'], 0, 1)) ?>
                                 <?php endif; ?>
                             </span>
-                            <span class="sidebar-club__info">
-                                <span class="sidebar-club__name"><?= e($c['name']) ?></span>
-                                <span class="sidebar-club__meta muted">
-                                    <?= (int)$c['member_count'] ?> уч.
-                                    <?php if ($c['role'] === 'owner'): ?> · 👑<?php endif; ?>
-                                    <?php if ($c['role'] === 'admin'): ?> · ⭐<?php endif; ?>
+                            <span class="sidebar-athlete__info">
+                                <span class="sidebar-athlete__name"><?= e($ta['display_name']) ?></span>
+                                <span class="sidebar-athlete__meta muted">
+                                    <?= (int)$ta['cnt'] ?> трен. · <?= e(format_distance((float)$ta['dist_m'])) ?>
                                 </span>
                             </span>
                         </a>
                     <?php endforeach; ?>
-
-                    <?php if ($myClubsCount > count($myClubs)): ?>
-                        <a href="<?= e(url('clubs.php')) ?>" class="sidebar-clubs__more">
-                            Ещё <?= (int)($myClubsCount - count($myClubs)) ?> →
-                        </a>
-                    <?php endif; ?>
                 </div>
-            <?php endif; ?>
-        </div>
+            </div>
+        <?php endif; ?>
 
-        <div class="sidebar-card">
-            <h3 class="sidebar-card__title">Действия</h3>
-            <nav class="sidebar-nav">
-                <a href="<?= e(url('activity-upload.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">📂</span><span>Активность</span></a>
-                <a href="<?= e(url('activity-create.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">✏️</span><span>Добавить вручную</span></a>
-                <a href="<?= e(url('post-create.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">📝</span><span>Запись в блог</span></a>
-                <a href="<?= e(url('route-create.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">🗺️</span><span>Маршрут</span></a>
-                <a href="<?= e(url('segment-create.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">⚡</span><span>Сегмент</span></a>
-                <a href="<?= e(url('clubs.php')) ?>" class="sidebar-nav__link"><span class="sidebar-nav__icon">🏁</span><span>Все клубы</span></a>
-            </nav>
-        </div>
+        
     </aside>
 
+    <!-- ============================================================
+         ЦЕНТР — ЛЕНТА
+         ============================================================ -->
     <div class="feed-main">
         <header class="feed-page__head">
             <h1 class="feed-page__title">Лента</h1>
@@ -1250,30 +1626,12 @@ require __DIR__ . '/includes/header.php';
                             </div>
 
                             <?php $cs = $commentsByActivity[$aid] ?? []; ?>
-                            <?php if ($cs): ?>
-                                <div class="activity-card__comments">
-                                    <?php foreach ($cs as $c): ?>
-                                        <div class="comment">
-                                            <span class="avatar avatar--sm">
-                                                <?php if (!empty($c['avatar_url'])): ?>
-                                                    <img src="<?= e($c['avatar_url']) ?>" alt="">
-                                                <?php else: ?>
-                                                    <?= e(mb_substr((string)$c['display_name'], 0, 1)) ?>
-                                                <?php endif; ?>
-                                            </span>
-                                            <div class="comment__body">
-                                                <div class="comment__head">
-                                                    <a href="<?= e(url('profile.php?u=' . urlencode((string)$c['username']))) ?>"><strong><?= e($c['display_name']) ?></strong></a>
-                                                    <span class="comment__time muted"><?= e(time_ago((string)$c['created_at'])) ?></span>
-                                                </div>
-                                                <div><?= nl2br(e($c['body'])) ?></div>
-                                            </div>
-                                        </div>
-                                    <?php endforeach; ?>
-                                </div>
-                            <?php endif; ?>
+                            <?= feed_render_comments('activity', $aid, $cs, (bool)$me) ?>
 
-                            <form class="comment-form js-comment-form" data-kind="activity" data-id="<?= $aid ?>">
+                            <form class="comment-form js-comment-form" data-kind="activity" data-id="<?= $aid ?>" data-parent-id="">
+                                <div class="comment-form__reply-hint" hidden>
+                                    <button type="button" class="comment-form__reply-cancel js-reply-cancel" aria-label="Отменить ответ">×</button>
+                                </div>
                                 <input type="text" name="body" placeholder="Написать комментарий..." required maxlength="1000">
                                 <button type="submit">Отправить</button>
                             </form>
@@ -1337,30 +1695,12 @@ require __DIR__ . '/includes/header.php';
                                 </a>
                             </div>
 
-                            <?php if ($postComments): ?>
-                                <div class="post-card__comments">
-                                    <?php foreach ($postComments as $c): ?>
-                                        <div class="comment">
-                                            <span class="avatar avatar--sm">
-                                                <?php if (!empty($c['avatar_url'])): ?>
-                                                    <img src="<?= e($c['avatar_url']) ?>" alt="">
-                                                <?php else: ?>
-                                                    <?= e(mb_substr((string)$c['display_name'], 0, 1)) ?>
-                                                <?php endif; ?>
-                                            </span>
-                                            <div class="comment__body">
-                                                <div class="comment__head">
-                                                    <a href="<?= e(url('profile.php?u=' . urlencode((string)$c['username']))) ?>"><strong><?= e($c['display_name']) ?></strong></a>
-                                                    <span class="comment__time muted"><?= e(time_ago((string)$c['created_at'])) ?></span>
-                                                </div>
-                                                <div><?= nl2br(e($c['body'])) ?></div>
-                                            </div>
-                                        </div>
-                                    <?php endforeach; ?>
-                                </div>
-                            <?php endif; ?>
+                            <?= feed_render_comments('post', $pid, $postComments, (bool)$me) ?>
 
-                            <form class="comment-form js-comment-form" data-kind="post" data-id="<?= $pid ?>">
+                            <form class="comment-form js-comment-form" data-kind="post" data-id="<?= $pid ?>" data-parent-id="">
+                                <div class="comment-form__reply-hint" hidden>
+                                    <button type="button" class="comment-form__reply-cancel js-reply-cancel" aria-label="Отменить ответ">×</button>
+                                </div>
                                 <input type="text" name="body" placeholder="Написать комментарий..." required maxlength="1000">
                                 <button type="submit">Отправить</button>
                             </form>
@@ -1379,6 +1719,96 @@ require __DIR__ . '/includes/header.php';
             </div>
         <?php endif; ?>
     </div>
+
+    <!-- ============================================================
+         ПРАВАЯ КОЛОНКА
+         ============================================================ -->
+    <aside class="feed-rightbar">
+
+        <!-- Клубы -->
+        <div class="rightbar-card rightbar-card--clubs">
+            <h3 class="rightbar-card__title">Ваши клубы</h3>
+            <?php if (!$allMyClubs): ?>
+                <p class="muted" style="font-size:13px">Вы пока не состоите ни в одном клубе.</p>
+                <a href="<?= e(url('clubs.php')) ?>" class="btn btn--ghost btn--sm" style="margin-top:8px">Найти клуб</a>
+            <?php else: ?>
+                <div class="rightbar-clubs" id="rightbar-clubs">
+                    <?php foreach ($allMyClubs as $i => $c): ?>
+                        <a class="rightbar-club <?= $i >= 10 ? 'is-hidden' : '' ?>"
+                           href="<?= e(url('club.php?slug=' . urlencode((string)$c['slug']))) ?>"
+                           title="<?= e($c['name']) ?>">
+                            <?php if (!empty($c['avatar_url'])): ?>
+                                <img src="<?= e($c['avatar_url']) ?>" alt="">
+                            <?php else: ?>
+                                <span class="rightbar-club__initial"><?= e(mb_substr((string)$c['name'], 0, 1)) ?></span>
+                            <?php endif; ?>
+                        </a>
+                    <?php endforeach; ?>
+                </div>
+                <?php if (count($allMyClubs) > 10): ?>
+                    <button type="button" class="rightbar-clubs__toggle" id="rightbar-clubs-toggle">
+                        Развернуть
+                    </button>
+                <?php endif; ?>
+                <a href="<?= e(url('clubs.php')) ?>" class="btn btn--ghost btn--sm rightbar-clubs__all">
+                    Все клубы
+                </a>
+            <?php endif; ?>
+        </div>
+
+        <!-- Рекомендации подписок -->
+        <?php if ($suggestedUsers): ?>
+            <div class="rightbar-card">
+                <h3 class="rightbar-card__title">РЕКОМЕНДАЦИИ</h3>
+                <div class="rightbar-users">
+                    <?php foreach ($suggestedUsers as $su): ?>
+                        <div class="rightbar-user">
+                            <a class="rightbar-user__link" href="<?= e(url('profile.php?u=' . urlencode((string)$su['username']))) ?>">
+                                <span class="avatar avatar--sm">
+                                    <?php if (!empty($su['avatar_url'])): ?>
+                                        <img src="<?= e($su['avatar_url']) ?>" alt="">
+                                    <?php else: ?>
+                                        <?= e(mb_substr((string)$su['display_name'], 0, 1)) ?>
+                                    <?php endif; ?>
+                                </span>
+                                <span class="rightbar-user__info">
+                                    <span class="rightbar-user__name"><?= e($su['display_name']) ?></span>
+                                    <span class="rightbar-user__meta muted">@<?= e($su['username']) ?> · <?= (int)$su['cnt'] ?> трен.</span>
+                                </span>
+                            </a>
+                            <form method="post" class="rightbar-user__follow" action="<?= e(url('feed.php')) ?>">
+                                <?= csrf_field() ?>
+                                <input type="hidden" name="action" value="follow_suggestion">
+                                <input type="hidden" name="target_id" value="<?= (int)$su['id'] ?>">
+                                <button class="btn btn--primary btn--sm">+</button>
+                            </form>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        <?php endif; ?>
+
+        <!-- Копирайт-меню -->
+        <div class="rightbar-card rightbar-card--footer">
+            <nav class="rightbar-nav">
+                <a href="<?= e(url('calendar.php')) ?>">Календарь</a>
+                <a href="<?= e(url('routes.php')) ?>">Маршруты</a>
+                <a href="<?= e(url('segments.php')) ?>">Сегменты</a>
+                <a href="<?= e(url('heatmap.php')) ?>">Карта</a>
+                <a href="<?= e(url('clubs.php')) ?>">Клубы</a>
+                <a href="<?= e(url('search.php')) ?>">Поиск</a>
+            </nav>
+            <div class="rightbar-divider"></div>
+            <nav class="rightbar-nav rightbar-nav--small">
+                <a href="<?= e(url('about.php')) ?>">О проекте</a>
+                <a href="<?= e(url('privacy.php')) ?>">Конфиденциальность</a>
+                <a href="<?= e(url('terms.php')) ?>">Условия</a>
+            </nav>
+            <div class="rightbar-copy">© <?= date('Y') ?> Pulse</div>
+        </div>
+
+    </aside>
+
 </div>
 
 <?php require __DIR__ . '/includes/footer.php'; ?>

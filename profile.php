@@ -11,7 +11,186 @@ require_once __DIR__ . '/models/Segment.php';
 auth_start();
 $me = current_user();
 
-// ---- Какой профиль открываем ----
+// ============================================================
+// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+// ============================================================
+
+if (!function_exists('profile_month_ru')) {
+    function profile_month_ru(int $month): string
+    {
+        $months = [
+            1 => 'январь', 2 => 'февраль', 3 => 'март',
+            4 => 'апрель', 5 => 'май',     6 => 'июнь',
+            7 => 'июль',   8 => 'август',  9 => 'сентябрь',
+            10 => 'октябрь', 11 => 'ноябрь', 12 => 'декабрь',
+        ];
+        return $months[$month] ?? '';
+    }
+}
+
+if (!function_exists('profile_month_ru_short')) {
+    function profile_month_ru_short(int $month): string
+    {
+        $months = [
+            1 => 'янв', 2 => 'фев', 3 => 'мар', 4 => 'апр',
+            5 => 'май', 6 => 'июн', 7 => 'июл', 8 => 'авг',
+            9 => 'сен', 10 => 'окт', 11 => 'ноя', 12 => 'дек',
+        ];
+        return $months[$month] ?? '';
+    }
+}
+
+if (!function_exists('profile_get_leader_segments')) {
+    function profile_get_leader_segments(int $userId, int $limit = 20): array
+    {
+        $limit = max(1, min(100, $limit));
+
+        $sql = "
+            SELECT s.id, s.name, s.type, s.distance_m, s.elevation_gain_m, s.created_at,
+                   u.username AS creator_username,
+                   (
+                       SELECT MIN(e1.elapsed_time_sec)
+                       FROM segment_efforts e1
+                       WHERE e1.segment_id = s.id AND e1.user_id = :me
+                   ) AS my_best
+            FROM segments s
+            JOIN users u ON u.id = s.creator_id
+            WHERE EXISTS (
+                SELECT 1 FROM segment_efforts e2
+                WHERE e2.segment_id = s.id AND e2.user_id = :me2
+            )
+            ORDER BY s.created_at DESC
+            LIMIT 200
+        ";
+
+        $stmt = db()->prepare($sql);
+        $stmt->bindValue(':me', $userId, PDO::PARAM_INT);
+        $stmt->bindValue(':me2', $userId, PDO::PARAM_INT);
+        $stmt->execute();
+        $candidates = $stmt->fetchAll();
+
+        if (!$candidates) return [];
+
+        $leaders = [];
+
+        foreach ($candidates as $s) {
+            $myBest = (int)$s['my_best'];
+            if ($myBest <= 0) continue;
+
+            $check = db()->prepare(
+                'SELECT MIN(elapsed_time_sec)
+                 FROM segment_efforts
+                 WHERE segment_id = ? AND user_id != ?'
+            );
+            $check->execute([(int)$s['id'], $userId]);
+            $othersBest = $check->fetchColumn();
+
+            if ($othersBest !== null && (int)$othersBest < $myBest) {
+                continue;
+            }
+
+            $secondBest = null;
+            $gap = null;
+
+            if ($othersBest !== null) {
+                $secondBest = (int)$othersBest;
+                $gap = $secondBest - $myBest;
+            }
+
+            $cnt = db()->prepare(
+                'SELECT COUNT(DISTINCT user_id) FROM segment_efforts WHERE segment_id = ?'
+            );
+            $cnt->execute([(int)$s['id']]);
+            $athletes = (int)$cnt->fetchColumn();
+
+            $leaders[] = [
+                'id'                 => (int)$s['id'],
+                'name'               => (string)$s['name'],
+                'type'               => (string)$s['type'],
+                'distance_m'         => (float)$s['distance_m'],
+                'elevation_gain_m'   => $s['elevation_gain_m'] !== null ? (float)$s['elevation_gain_m'] : null,
+                'creator_username'   => (string)$s['creator_username'],
+                'best_time'          => $myBest,
+                'second_best'        => $secondBest,
+                'gap_sec'            => $gap,
+                'athletes'           => $athletes,
+            ];
+
+            if (count($leaders) >= $limit) break;
+        }
+
+        return $leaders;
+    }
+}
+
+if (!function_exists('profile_segment_icon')) {
+    function profile_segment_icon(string $type): string
+    {
+        return match ($type) {
+            'run' => '🏃', 'ride' => '🚴', 'swim' => '🏊', 'ski' => '⛷️',
+            'walk' => '🚶', 'hike' => '🥾', default => '📦',
+        };
+    }
+}
+
+if (!function_exists('profile_segment_label')) {
+    function profile_segment_label(string $type): string
+    {
+        return match ($type) {
+            'run' => 'Бег', 'ride' => 'Велосипед', 'swim' => 'Плавание',
+            'ski' => 'Лыжи', 'walk' => 'Ходьба', 'hike' => 'Хайкинг',
+            default => 'Другое',
+        };
+    }
+}
+
+if (!function_exists('profile_format_elapsed')) {
+    function profile_format_elapsed(int $seconds): string
+    {
+        $h = intdiv($seconds, 3600);
+        $m = intdiv($seconds % 3600, 60);
+        $s = $seconds % 60;
+        return $h > 0
+            ? sprintf('%d:%02d:%02d', $h, $m, $s)
+            : sprintf('%d:%02d', $m, $s);
+    }
+}
+
+if (!function_exists('profile_format_gap')) {
+    function profile_format_gap(int $gapSec): string
+    {
+        if ($gapSec <= 0) return '—';
+        if ($gapSec < 60) return '+' . $gapSec . ' с';
+        $m = intdiv($gapSec, 60);
+        $s = $gapSec % 60;
+        return '+' . $m . ':' . str_pad((string)$s, 2, '0', STR_PAD_LEFT);
+    }
+}
+
+if (!function_exists('activity_icon')) {
+    function activity_icon(string $type): string
+    {
+        return match ($type) {
+            'run' => '🏃', 'ride' => '🚴', 'swim' => '🏊', 'ski' => '⛷️',
+            'walk' => '🚶', 'hike' => '🥾', default => '📦',
+        };
+    }
+}
+
+if (!function_exists('activity_label')) {
+    function activity_label(string $type): string
+    {
+        return match ($type) {
+            'run' => 'Бег', 'ride' => 'Велосипед', 'swim' => 'Плавание',
+            'ski' => 'Лыжи', 'walk' => 'Ходьба', 'hike' => 'Хайкинг',
+            default => 'Другое',
+        };
+    }
+}
+
+// ============================================================
+// КАКОЙ ПРОФИЛЬ ОТКРЫВАЕМ
+// ============================================================
 $username = trim((string)($_GET['u'] ?? ''));
 if ($username === '' && $me) $username = (string)$me['username'];
 if ($username === '') redirect(url('index.php'));
@@ -40,7 +219,7 @@ if (!$user) {
 
 $isMe = $me && (int)$me['id'] === (int)$user['id'];
 
-// ---- Wahoo connection status ----
+// ---- Wahoo ----
 $wahooConnected = false;
 $wahooSyncedCount = 0;
 if ($isMe) {
@@ -74,6 +253,11 @@ $totalPages = 1;
 $pageNum = 1;
 $perPage = 20;
 
+// ---- Фильтр по типу ----
+$allowedTypes = ['', 'run', 'ride', 'swim', 'ski', 'walk', 'hike', 'other'];
+$typeFilter = (string)($_GET['type'] ?? '');
+if (!in_array($typeFilter, $allowedTypes, true)) $typeFilter = '';
+
 if (!$isPublicProfile && !$isMe) {
     $privateProfile = true;
     $stats = ['activities' => 0, 'distance_m' => 0, 'followers' => 0, 'following' => 0];
@@ -93,11 +277,17 @@ if (!$isPublicProfile && !$isMe) {
         $followersCount = $followingCount = 0;
     }
 
-    // ---- Пагинация активностей ----
+    // ---- Пагинация активностей (с учётом фильтра) ----
     $pageNum = max(1, (int)($_GET['page'] ?? 1));
 
     try {
-        $totalActivities = Activity::countByUser((int)$user['id']);
+        if ($typeFilter !== '') {
+            $stmt = db()->prepare('SELECT COUNT(*) FROM activities WHERE user_id = ? AND type = ?');
+            $stmt->execute([(int)$user['id'], $typeFilter]);
+            $totalActivities = (int)$stmt->fetchColumn();
+        } else {
+            $totalActivities = Activity::countByUser((int)$user['id']);
+        }
     } catch (Throwable $e) {
         $totalActivities = 0;
     }
@@ -107,7 +297,25 @@ if (!$isPublicProfile && !$isMe) {
     $offset = ($pageNum - 1) * $perPage;
 
     try {
-        $activities = Activity::byUser((int)$user['id'], $perPage, $offset);
+        if ($typeFilter !== '') {
+            $stmt = db()->prepare(
+                'SELECT a.*,
+                    (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id) AS likes_count,
+                    (SELECT COUNT(*) FROM activity_comments c WHERE c.activity_id = a.id) AS comments_count
+                 FROM activities a
+                 WHERE a.user_id = ? AND a.type = ?
+                 ORDER BY COALESCE(a.started_at, a.created_at) DESC, a.id DESC
+                 LIMIT ? OFFSET ?'
+            );
+            $stmt->bindValue(1, (int)$user['id'], PDO::PARAM_INT);
+            $stmt->bindValue(2, $typeFilter);
+            $stmt->bindValue(3, $perPage, PDO::PARAM_INT);
+            $stmt->bindValue(4, $offset, PDO::PARAM_INT);
+            $stmt->execute();
+            $activities = $stmt->fetchAll();
+        } else {
+            $activities = Activity::byUser((int)$user['id'], $perPage, $offset);
+        }
     } catch (Throwable $e) { $activities = []; }
 
     try {
@@ -151,6 +359,79 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $me && !$isMe) {
     }
 }
 
+// ============================================================
+// АГРЕГИРОВАННАЯ СТАТИСТИКА (ВСЕ АКТИВНОСТИ, НЕ ТОЛЬКО СТРАНИЦА)
+// ============================================================
+$aggStats = [
+    'total'      => 0,
+    'total_dist' => 0.0,
+    'total_dur'  => 0,
+    'total_elev' => 0.0,
+    'avg_speed'  => null,
+];
+
+$monthlyStats = [];    // ['2026-05' => ['dist' => ..., 'count' => ...], ...]
+$typeStats    = [];    // ['run' => ['count' => ..., 'dist' => ...], ...]
+
+if (!$privateProfile) {
+    try {
+        $stmt = db()->prepare(
+            'SELECT type,
+                    COUNT(*)                AS cnt,
+                    COALESCE(SUM(distance_m), 0)       AS dist,
+                    COALESCE(SUM(duration_sec), 0)     AS dur,
+                    COALESCE(SUM(elevation_gain_m), 0) AS elev
+             FROM activities
+             WHERE user_id = ?
+             GROUP BY type'
+        );
+        $stmt->execute([(int)$user['id']]);
+        $rows = $stmt->fetchAll();
+
+        foreach ($rows as $row) {
+            $type = (string)$row['type'];
+            $aggStats['total']      += (int)$row['cnt'];
+            $aggStats['total_dist'] += (float)$row['dist'];
+            $aggStats['total_dur']  += (int)$row['dur'];
+            $aggStats['total_elev'] += (float)$row['elev'];
+
+            $typeStats[$type] = [
+                'count' => (int)$row['cnt'],
+                'dist'  => (float)$row['dist'],
+            ];
+        }
+
+        if ($aggStats['total_dur'] > 0 && $aggStats['total_dist'] > 0) {
+            $aggStats['avg_speed'] = $aggStats['total_dist'] / $aggStats['total_dur']; // м/с
+        }
+    } catch (Throwable $e) {
+        // нули
+    }
+
+    // ---- Разбивка по месяцам (последние 12 месяцев) ----
+    try {
+        $stmt = db()->prepare(
+            "SELECT DATE_FORMAT(COALESCE(started_at, created_at), '%Y-%m') AS ym,
+                    COUNT(*)                AS cnt,
+                    COALESCE(SUM(distance_m), 0) AS dist
+             FROM activities
+             WHERE user_id = ?
+               AND COALESCE(started_at, created_at) >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)
+             GROUP BY ym
+             ORDER BY ym ASC"
+        );
+        $stmt->execute([(int)$user['id']]);
+        foreach ($stmt->fetchAll() as $row) {
+            $monthlyStats[(string)$row['ym']] = [
+                'count' => (int)$row['cnt'],
+                'dist'  => (float)$row['dist'],
+            ];
+        }
+    } catch (Throwable $e) {
+        $monthlyStats = [];
+    }
+}
+
 // ---- Упрощённые треки для карт в профиле ----
 $tracksByActivity = [];
 if ($activities) {
@@ -191,7 +472,7 @@ if ($activities) {
     }
 }
 
-// ---- Фото активностей одним запросом ----
+// ---- Фото активностей ----
 $photosByActivity = [];
 if ($activities) {
     try {
@@ -211,13 +492,61 @@ if ($activities) {
     }
 }
 
+// ---- Клубы пользователя ----
+$userClubs = [];
+try {
+    $s = db()->prepare(
+        'SELECT c.id, c.name, c.slug, c.avatar_url, c.member_count,
+                m.role, m.joined_at
+           FROM club_members m
+           JOIN clubs c ON c.id = m.club_id
+          WHERE m.user_id = ? AND m.status = "active" AND c.is_banned = 0
+       ORDER BY FIELD(m.role, "owner","admin","moderator","member"), m.joined_at ASC
+          LIMIT 30'
+    );
+    $s->execute([(int)$user['id']]);
+    $userClubs = $s->fetchAll();
+} catch (Throwable $e) {
+    $userClubs = [];
+}
+
+// ---- Данные для графика по месяцам ----
+$chartLabels = [];
+$chartDist   = [];
+$chartCount  = [];
+
+$now = new DateTime('first day of this month');
+for ($i = 11; $i >= 0; $i--) {
+    $d = clone $now;
+    $d->modify("-{$i} month");
+    $ym = $d->format('Y-m');
+    $chartLabels[] = profile_month_ru_short((int)$d->format('n')) . ' ' . $d->format('y');
+    $chartDist[]   = isset($monthlyStats[$ym]) ? round($monthlyStats[$ym]['dist'] / 1000, 1) : 0;
+    $chartCount[]  = isset($monthlyStats[$ym]) ? $monthlyStats[$ym]['count'] : 0;
+}
+
 $pageTitle = $user['display_name'];
 
-$extraCss = ['https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'];
-$extraJs  = ['https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'];
+$extraCss = [
+    'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
+];
+$extraJs  = [
+    'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
+    'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js',
+];
+
+$chartLabelsJson = json_encode($chartLabels, JSON_UNESCAPED_UNICODE);
+$chartDistJson   = json_encode($chartDist);
+$chartCountJson  = json_encode($chartCount);
 
 $inlineJs = '
 window.__PROFILE_TRACKS__ = ' . json_encode($tracksByActivity, JSON_UNESCAPED_UNICODE) . ';
+window.__PROFILE_CHART__ = {
+    labels: ' . $chartLabelsJson . ',
+    dist:   ' . $chartDistJson . ',
+    count:  ' . $chartCountJson . '
+};
+
 (function () {
     if (typeof L === "undefined") return;
     var tracks = window.__PROFILE_TRACKS__ || {};
@@ -266,6 +595,110 @@ window.__PROFILE_TRACKS__ = ' . json_encode($tracksByActivity, JSON_UNESCAPED_UN
         maps.forEach(function (el) { io.observe(el); });
     } else {
         maps.forEach(initMap);
+    }
+})();
+
+/* ---- ГРАФИКИ ПРОФИЛЯ ---- */
+(function () {
+    if (typeof Chart === "undefined") return;
+    var data = window.__PROFILE_CHART__ || {};
+    if (!data.labels || !data.labels.length) return;
+
+    Chart.defaults.font.family = "\'Inter\', system-ui, sans-serif";
+    Chart.defaults.font.size   = 11;
+    Chart.defaults.color       = "#5b6473";
+
+    var distCanvas = document.getElementById("profile-chart-dist");
+    if (distCanvas) {
+        var ctx = distCanvas.getContext("2d");
+        var grad = ctx.createLinearGradient(0, 0, 0, 260);
+        grad.addColorStop(0, "rgba(255,90,31,.35)");
+        grad.addColorStop(1, "rgba(255,90,31,.02)");
+        new Chart(ctx, {
+            type: "bar",
+            data: {
+                labels: data.labels,
+                datasets: [{
+                    label: "Дистанция, км",
+                    data: data.dist,
+                    backgroundColor: grad,
+                    borderColor: "#ff5a1f",
+                    borderWidth: 1.5,
+                    borderRadius: 6,
+                    maxBarThickness: 32,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: "rgba(15,20,32,.92)",
+                        padding: 10,
+                        cornerRadius: 8,
+                        displayColors: false,
+                        callbacks: {
+                            label: function (item) {
+                                return item.parsed.y.toFixed(1) + " км";
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: false, font: { size: 10 } } },
+                    y: { beginAtZero: true, grid: { color: "rgba(15,20,32,.06)" }, ticks: { callback: function (v) { return v + " км"; }, maxTicksLimit: 6 } }
+                }
+            }
+        });
+    }
+
+    var countCanvas = document.getElementById("profile-chart-count");
+    if (countCanvas) {
+        var ctx2 = countCanvas.getContext("2d");
+        var grad2 = ctx2.createLinearGradient(0, 0, 0, 260);
+        grad2.addColorStop(0, "rgba(31,95,196,.35)");
+        grad2.addColorStop(1, "rgba(31,95,196,.02)");
+        new Chart(ctx2, {
+            type: "line",
+            data: {
+                labels: data.labels,
+                datasets: [{
+                    label: "Активностей",
+                    data: data.count,
+                    borderColor: "#1f5fc4",
+                    backgroundColor: grad2,
+                    borderWidth: 2,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                    pointBackgroundColor: "#1f5fc4",
+                    fill: true,
+                    tension: 0.3,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: "rgba(15,20,32,.92)",
+                        padding: 10,
+                        cornerRadius: 8,
+                        displayColors: false,
+                        callbacks: {
+                            label: function (item) {
+                                return item.parsed.y + " шт";
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: false, font: { size: 10 } } },
+                    y: { beginAtZero: true, grid: { color: "rgba(15,20,32,.06)" }, ticks: { precision: 0, maxTicksLimit: 6 } }
+                }
+            }
+        });
     }
 })();
 
@@ -455,9 +888,7 @@ window.__PROFILE_TRACKS__ = ' . json_encode($tracksByActivity, JSON_UNESCAPED_UN
         })
         .then(function (r) { return r.json(); })
         .then(function (res) {
-            if (!res || !res.ok) {
-                throw new Error((res && res.error) || "Ошибка");
-            }
+            if (!res || !res.ok) throw new Error((res && res.error) || "Ошибка");
             var data = res.data || {};
             var likers = data.likers || [];
             var html = renderList(likers);
@@ -471,9 +902,7 @@ window.__PROFILE_TRACKS__ = ' . json_encode($tracksByActivity, JSON_UNESCAPED_UN
     }
 
     function renderList(likers) {
-        if (!likers.length) {
-            return "<div class=\"likers-modal__empty\">Пока никто не лайкнул</div>";
-        }
+        if (!likers.length) return "<div class=\"likers-modal__empty\">Пока никто не лайкнул</div>";
         var html = "<ul class=\"likers-list\">";
         likers.forEach(function (u) {
             var avatar = u.avatar_url
@@ -523,152 +952,6 @@ window.__PROFILE_TRACKS__ = ' . json_encode($tracksByActivity, JSON_UNESCAPED_UN
 ';
 
 require __DIR__ . '/includes/header.php';
-
-// ============================================================
-// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-// ============================================================
-
-function profile_get_leader_segments(int $userId, int $limit = 20): array
-{
-    $limit = max(1, min(100, $limit));
-
-    $sql = "
-        SELECT s.id, s.name, s.type, s.distance_m, s.elevation_gain_m, s.created_at,
-               u.username AS creator_username,
-               (
-                   SELECT MIN(e1.elapsed_time_sec)
-                   FROM segment_efforts e1
-                   WHERE e1.segment_id = s.id AND e1.user_id = :me
-               ) AS my_best
-        FROM segments s
-        JOIN users u ON u.id = s.creator_id
-        WHERE EXISTS (
-            SELECT 1 FROM segment_efforts e2
-            WHERE e2.segment_id = s.id AND e2.user_id = :me2
-        )
-        ORDER BY s.created_at DESC
-        LIMIT 200
-    ";
-
-    $stmt = db()->prepare($sql);
-    $stmt->bindValue(':me', $userId, PDO::PARAM_INT);
-    $stmt->bindValue(':me2', $userId, PDO::PARAM_INT);
-    $stmt->execute();
-    $candidates = $stmt->fetchAll();
-
-    if (!$candidates) return [];
-
-    $leaders = [];
-
-    foreach ($candidates as $s) {
-        $myBest = (int)$s['my_best'];
-        if ($myBest <= 0) continue;
-
-        $check = db()->prepare(
-            'SELECT MIN(elapsed_time_sec)
-             FROM segment_efforts
-             WHERE segment_id = ? AND user_id != ?'
-        );
-        $check->execute([(int)$s['id'], $userId]);
-        $othersBest = $check->fetchColumn();
-
-        if ($othersBest !== null && (int)$othersBest < $myBest) {
-            continue;
-        }
-
-        $secondBest = null;
-        $gap = null;
-
-        if ($othersBest !== null) {
-            $secondBest = (int)$othersBest;
-            $gap = $secondBest - $myBest;
-        }
-
-        $cnt = db()->prepare(
-            'SELECT COUNT(DISTINCT user_id) FROM segment_efforts WHERE segment_id = ?'
-        );
-        $cnt->execute([(int)$s['id']]);
-        $athletes = (int)$cnt->fetchColumn();
-
-        $leaders[] = [
-            'id'                 => (int)$s['id'],
-            'name'               => (string)$s['name'],
-            'type'               => (string)$s['type'],
-            'distance_m'         => (float)$s['distance_m'],
-            'elevation_gain_m'   => $s['elevation_gain_m'] !== null ? (float)$s['elevation_gain_m'] : null,
-            'creator_username'   => (string)$s['creator_username'],
-            'best_time'          => $myBest,
-            'second_best'        => $secondBest,
-            'gap_sec'            => $gap,
-            'athletes'           => $athletes,
-        ];
-
-        if (count($leaders) >= $limit) break;
-    }
-
-    return $leaders;
-}
-
-function profile_segment_icon(string $type): string
-{
-    return match ($type) {
-        'run'  => '🏃',
-        'ride' => '🚴',
-        'swim' => '🏊',
-        'ski'  => '⛷️',
-        'walk' => '🚶',
-        'hike' => '🥾',
-        default => '📦',
-    };
-}
-
-function profile_segment_label(string $type): string
-{
-    return match ($type) {
-        'run'  => 'Бег',
-        'ride' => 'Велосипед',
-        'swim' => 'Плавание',
-        'ski'  => 'Лыжи',
-        'walk' => 'Ходьба',
-        'hike' => 'Хайкинг',
-        default => 'Другое',
-    };
-}
-
-function profile_format_elapsed(int $seconds): string
-{
-    $h = intdiv($seconds, 3600);
-    $m = intdiv($seconds % 3600, 60);
-    $s = $seconds % 60;
-    return $h > 0
-        ? sprintf('%d:%02d:%02d', $h, $m, $s)
-        : sprintf('%d:%02d', $m, $s);
-}
-
-function profile_format_gap(int $gapSec): string
-{
-    if ($gapSec <= 0) return '—';
-    if ($gapSec < 60) return '+' . $gapSec . ' с';
-    $m = intdiv($gapSec, 60);
-    $s = $gapSec % 60;
-    return '+' . $m . ':' . str_pad((string)$s, 2, '0', STR_PAD_LEFT);
-}
-
-function activity_icon(string $type): string
-{
-    return match ($type) {
-        'run' => '🏃', 'ride' => '🚴', 'swim' => '🏊', 'ski' => '⛷️',
-        'walk' => '🚶', 'hike' => '🥾', default => '📦',
-    };
-}
-function activity_label(string $type): string
-{
-    return match ($type) {
-        'run' => 'Бег', 'ride' => 'Велосипед', 'swim' => 'Плавание',
-        'ski' => 'Лыжи', 'walk' => 'Ходьба', 'hike' => 'Хайкинг',
-        default => 'Другое',
-    };
-}
 ?>
 
 <section class="profile-page">
@@ -692,7 +975,7 @@ function activity_label(string $type): string
                         <?php if (!empty($user['city']) || !empty($user['country'])): ?>
                             <span>📍 <?= e(trim(($user['city'] ?? '') . ', ' . ($user['country'] ?? ''), ', ')) ?></span>
                         <?php endif; ?>
-                        <span>📅 С нами с <?= e(date('F Y', strtotime((string)$user['created_at']))) ?></span>
+                        <span>📅 С нами с <?= e(profile_month_ru((int)date('n', strtotime((string)$user['created_at']))) . ' ' . date('Y', strtotime((string)$user['created_at']))) ?></span>
                         <?php if (!$isPublicProfile): ?>
                             <span>🔒 Приватный профиль</span>
                         <?php endif; ?>
@@ -745,81 +1028,174 @@ function activity_label(string $type): string
         </div>
     <?php else: ?>
 
-        <!-- Цифры -->
-        <div class="profile-numbers">
-            <div class="profile-numbers__cell">
-                <span class="profile-numbers__value"><?= (int)$stats['activities'] ?></span>
-                <span class="profile-numbers__label">Активностей</span>
-            </div>
-            <div class="profile-numbers__cell">
-                <span class="profile-numbers__value"><?= e(format_distance((float)$stats['distance_m'])) ?></span>
-                <span class="profile-numbers__label">Всего дистанции</span>
-            </div>
-            <a href="<?= e(url('profile-followers.php?u=' . urlencode((string)$user['username']))) ?>"
-               class="profile-numbers__cell profile-numbers__cell--link">
-                <span class="profile-numbers__value"><?= (int)$stats['followers'] ?></span>
-                <span class="profile-numbers__label">Подписчиков</span>
-            </a>
-            <a href="<?= e(url('profile-following.php?u=' . urlencode((string)$user['username']))) ?>"
-               class="profile-numbers__cell profile-numbers__cell--link">
-                <span class="profile-numbers__value"><?= (int)$stats['following'] ?></span>
-                <span class="profile-numbers__label">Подписок</span>
-            </a>
-        </div>
-        
-        <!-- ============ КЛУБЫ ПОЛЬЗОВАТЕЛЯ ============ -->
-<?php
-    $userClubs = [];
-    try {
-        $s = db()->prepare(
-            'SELECT c.id, c.name, c.slug, c.avatar_url, c.member_count,
-                    m.role, m.joined_at
-               FROM club_members m
-               JOIN clubs c ON c.id = m.club_id
-              WHERE m.user_id = ? AND m.status = "active" AND c.is_banned = 0
-           ORDER BY FIELD(m.role, "owner","admin","moderator","member"), m.joined_at ASC
-              LIMIT 30'
-        );
-        $s->execute([(int)$user['id']]);
-        $userClubs = $s->fetchAll();
-    } catch (Throwable $e) {
-        $userClubs = [];
-    }
-?>
+        <!-- ============ ОДИН БЛОК СТАТИСТИКИ ============ -->
+        <section class="profile-section">
+            <div class="profile-stats">
 
-<?php if ($userClubs): ?>
-    <section class="profile-section">
-        <div class="profile-section__head">
-            <h2 class="profile-section__title">
-                Клубы
-                <span class="profile-section__count"><?= count($userClubs) ?></span>
-            </h2>
-        </div>
-        <div class="profile-clubs">
-            <?php foreach ($userClubs as $uc): ?>
-                <a class="profile-club-chip"
-                   href="<?= e(url('club.php?slug=' . urlencode((string)$uc['slug']))) ?>">
-                    <span class="profile-club-chip__avatar">
-                        <?php if (!empty($uc['avatar_url'])): ?>
-                            <img src="<?= e($uc['avatar_url']) ?>" alt="">
-                        <?php else: ?>
-                            <?= e(mb_substr((string)$uc['name'], 0, 1)) ?>
-                        <?php endif; ?>
-                    </span>
-                    <span class="profile-club-chip__info">
-                        <span class="profile-club-chip__name"><?= e($uc['name']) ?></span>
-                        <span class="profile-club-chip__meta muted">
-                            <?= (int)$uc['member_count'] ?> участников
-                            <?php if ($uc['role'] === 'owner'): ?> · владелец<?php endif; ?>
-                            <?php if ($uc['role'] === 'admin'): ?> · админ<?php endif; ?>
-                            <?php if ($uc['role'] === 'moderator'): ?> · модератор<?php endif; ?>
-                        </span>
-                    </span>
+                <a href="<?= e(url('profile.php?u=' . urlencode((string)$user['username']))) ?>"
+                   class="profile-stat profile-stat--accent">
+                    <div class="profile-stat__value"><?= (int)$stats['activities'] ?></div>
+                    <div class="profile-stat__label">Активностей</div>
                 </a>
-            <?php endforeach; ?>
-        </div>
-    </section>
-<?php endif; ?>
+
+                <div class="profile-stat">
+                    <div class="profile-stat__value"><?= e(format_distance((float)$stats['distance_m'])) ?></div>
+                    <div class="profile-stat__label">Всего дистанции</div>
+                </div>
+
+                <div class="profile-stat">
+                    <div class="profile-stat__value">
+                        <?= $aggStats['total_dur'] > 0 ? e(format_duration((int)$aggStats['total_dur'])) : '—' ?>
+                    </div>
+                    <div class="profile-stat__label">Всего времени</div>
+                </div>
+
+                <div class="profile-stat">
+                    <div class="profile-stat__value">
+                        <?= $aggStats['total_elev'] > 0
+                            ? number_format((float)$aggStats['total_elev'], 0, '.', ' ') . ' м'
+                            : '—' ?>
+                    </div>
+                    <div class="profile-stat__label">Набор высоты</div>
+                </div>
+
+                <div class="profile-stat">
+                    <div class="profile-stat__value">
+                        <?php if ($aggStats['avg_speed'] !== null): ?>
+                            <?= number_format((float)$aggStats['avg_speed'] * 3.6, 1, '.', '') ?> км/ч
+                        <?php else: ?>
+                            —
+                        <?php endif; ?>
+                    </div>
+                    <div class="profile-stat__label">Средняя скорость</div>
+                </div>
+
+                <a href="<?= e(url('profile-followers.php?u=' . urlencode((string)$user['username']))) ?>"
+                   class="profile-stat profile-stat--link">
+                    <div class="profile-stat__value"><?= (int)$stats['followers'] ?></div>
+                    <div class="profile-stat__label">Подписчиков</div>
+                </a>
+
+                <a href="<?= e(url('profile-following.php?u=' . urlencode((string)$user['username']))) ?>"
+                   class="profile-stat profile-stat--link">
+                    <div class="profile-stat__value"><?= (int)$stats['following'] ?></div>
+                    <div class="profile-stat__label">Подписок</div>
+                </a>
+
+            </div>
+        </section>
+
+        <!-- ============ РАЗБИВКА ПО ТИПАМ ============ -->
+        <?php if ($typeStats): ?>
+            <section class="profile-section">
+                <div class="profile-section__head">
+                    <h2 class="profile-section__title">📊 По типам</h2>
+                </div>
+
+                <div class="profile-types">
+                    <?php
+                        $typeColors = [
+                            'run'   => '#ff5a1f',
+                            'ride'  => '#1f5fc4',
+                            'swim'  => '#0ea5b7',
+                            'ski'   => '#7c3aed',
+                            'walk'  => '#0a7a3a',
+                            'hike'  => '#a36a00',
+                            'other' => '#5b6473',
+                        ];
+                        $totalDist = 0;
+                        foreach ($typeStats as $ts) $totalDist += $ts['dist'];
+                    ?>
+                    <?php foreach ($typeStats as $type => $ts): ?>
+                        <?php
+                            $color = $typeColors[$type] ?? '#5b6473';
+                            $icon  = activity_icon((string)$type);
+                            $label = activity_label((string)$type);
+                            $share = $totalDist > 0 ? round($ts['dist'] / $totalDist * 100) : 0;
+                        ?>
+                        <div class="profile-type-row">
+                            <div class="profile-type-row__head">
+                                <span class="profile-type-row__icon"><?= e($icon) ?></span>
+                                <span class="profile-type-row__name"><?= e($label) ?></span>
+                                <span class="profile-type-row__count">
+                                    <?= (int)$ts['count'] ?> · <?= e(format_distance($ts['dist'])) ?>
+                                    · <?= $share ?>%
+                                </span>
+                            </div>
+                            <div class="profile-type-row__bar">
+                                <div class="profile-type-row__fill"
+                                     style="width: <?= $share ?>%; background: <?= e($color) ?>;"></div>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </section>
+        <?php endif; ?>
+
+        <!-- ============ ГРАФИКИ ============ -->
+        <?php if ($aggStats['total'] > 0): ?>
+            <section class="profile-section">
+                <div class="profile-section__head">
+                    <h2 class="profile-section__title">📈 По месяцам</h2>
+                    <span class="muted" style="font-size:13px">последние 12 месяцев</span>
+                </div>
+
+                <div class="profile-charts">
+                    <div class="chart-card">
+                        <div class="chart-card__head">
+                            <h3 class="chart-card__title">Дистанция по месяцам</h3>
+                        </div>
+                        <div class="chart-card__body">
+                            <canvas id="profile-chart-dist"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="chart-card">
+                        <div class="chart-card__head">
+                            <h3 class="chart-card__title">Активности по месяцам</h3>
+                        </div>
+                        <div class="chart-card__body">
+                            <canvas id="profile-chart-count"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        <?php endif; ?>
+
+        <!-- ============ КЛУБЫ ============ -->
+        <?php if ($userClubs): ?>
+            <section class="profile-section">
+                <div class="profile-section__head">
+                    <h2 class="profile-section__title">
+                        🏁 Клубы
+                        <span class="profile-section__count"><?= count($userClubs) ?></span>
+                    </h2>
+                </div>
+                <div class="profile-clubs">
+                    <?php foreach ($userClubs as $uc): ?>
+                        <a class="profile-club-chip"
+                           href="<?= e(url('club.php?slug=' . urlencode((string)$uc['slug']))) ?>">
+                            <span class="profile-club-chip__avatar">
+                                <?php if (!empty($uc['avatar_url'])): ?>
+                                    <img src="<?= e($uc['avatar_url']) ?>" alt="">
+                                <?php else: ?>
+                                    <?= e(mb_substr((string)$uc['name'], 0, 1)) ?>
+                                <?php endif; ?>
+                            </span>
+                            <span class="profile-club-chip__info">
+                                <span class="profile-club-chip__name"><?= e($uc['name']) ?></span>
+                                <span class="profile-club-chip__meta muted">
+                                    <?= (int)$uc['member_count'] ?> участников
+                                    <?php if ($uc['role'] === 'owner'): ?> · владелец<?php endif; ?>
+                                    <?php if ($uc['role'] === 'admin'): ?> · админ<?php endif; ?>
+                                    <?php if ($uc['role'] === 'moderator'): ?> · модератор<?php endif; ?>
+                                </span>
+                            </span>
+                        </a>
+                    <?php endforeach; ?>
+                </div>
+            </section>
+        <?php endif; ?>
 
         <!-- ============ ПОДПИСЧИКИ И ПОДПИСКИ ============ -->
         <?php if ($followers || $following): ?>
@@ -955,19 +1331,45 @@ function activity_label(string $type): string
             </section>
         <?php endif; ?>
 
-        <!-- Активности -->
+        <!-- ============ АКТИВНОСТИ ============ -->
         <h2 class="profile-section-title">
             Активности
             <?php if ($totalActivities > 0): ?>
                 <span class="muted" style="font-weight:500;font-size:14px">
-                    (<?= (int)$totalActivities ?> всего<?= $totalPages > 1 ? ', стр. ' . (int)$pageNum . ' из ' . (int)$totalPages : '' ?>)
+                    (<?= (int)$totalActivities ?><?= $typeFilter !== '' ? ' · ' . e(activity_label($typeFilter)) : '' ?><?= $totalPages > 1 ? ', стр. ' . (int)$pageNum . ' из ' . (int)$totalPages : '' ?>)
                 </span>
             <?php endif; ?>
         </h2>
 
+        <!-- Фильтры -->
+        <div class="profile-filters">
+            <?php
+                $typeFilters = [
+                    ''      => 'Все',
+                    'run'   => '🏃 Бег',
+                    'ride'  => '🚴 Вело',
+                    'swim'  => '🏊 Плавание',
+                    'ski'   => '⛷️ Лыжи',
+                    'walk'  => '🚶 Ходьба',
+                    'hike'  => '🥾 Хайкинг',
+                    'other' => '📦 Другое',
+                ];
+            ?>
+            <?php foreach ($typeFilters as $key => $label): ?>
+                <?php
+                    $qs = ['u' => (string)$user['username']];
+                    if ($key !== '') $qs['type'] = $key;
+                ?>
+                <a href="?<?= e(http_build_query($qs)) ?>"
+                   class="profile-filter <?= $typeFilter === $key ? 'is-active' : '' ?>">
+                    <?= e($label) ?>
+                </a>
+            <?php endforeach; ?>
+        </div>
+
         <?php if (!$activities): ?>
             <div class="empty">
-                <p>Пока нет активностей.</p>
+                <p>Пока нет активностей<?= $typeFilter !== '' ? ' этого типа' : '' ?>.</p>
                 <?php if ($isMe): ?>
                     <a href="<?= e(url('activity-upload.php')) ?>" class="btn btn--primary">Загрузить первую</a>
                 <?php endif; ?>
@@ -990,7 +1392,8 @@ function activity_label(string $type): string
                                 <?php
                                     $activityWhen = $a['started_at'] ?? $a['created_at'] ?? null;
                                     if ($activityWhen) {
-                                        echo '📅 ' . e(date('d.m.Y H:i', strtotime((string)$activityWhen)));
+                                        $ts = strtotime((string)$activityWhen);
+                                        echo '📅 ' . e(date('d.m.Y H:i', $ts));
                                     }
                                 ?>
                             </span>
@@ -1095,80 +1498,74 @@ function activity_label(string $type): string
             </div>
 
             <?php if ($totalPages > 1): ?>
-    <nav class="pagination" aria-label="Навигация по страницам активностей">
-        <?php
-            $baseQs = ['u' => (string)$user['username']];
+                <nav class="pagination" aria-label="Навигация по страницам активностей">
+                    <?php
+                        $baseQs = ['u' => (string)$user['username']];
+                        if ($typeFilter !== '') $baseQs['type'] = $typeFilter;
 
-            // Окно страниц: показываем не больше 7 номеров вокруг текущей
-            $window = 2;
-            $start = max(1, $pageNum - $window);
-            $end   = min($totalPages, $pageNum + $window);
+                        $window = 2;
+                        $start = max(1, $pageNum - $window);
+                        $end   = min($totalPages, $pageNum + $window);
 
-            // Расширяем окно, чтобы всегда было ~5 номеров, если это возможно
-            if ($end - $start < $window * 2) {
-                if ($start === 1) {
-                    $end = min($totalPages, $start + $window * 2);
-                } elseif ($end === $totalPages) {
-                    $start = max(1, $end - $window * 2);
-                }
-            }
-        ?>
+                        if ($end - $start < $window * 2) {
+                            if ($start === 1) {
+                                $end = min($totalPages, $start + $window * 2);
+                            } elseif ($end === $totalPages) {
+                                $start = max(1, $end - $window * 2);
+                            }
+                        }
+                    ?>
 
-        <?php // «В начало» + стрелка влево ?>
-        <?php if ($pageNum > 1): ?>
-            <a class="pagination__link pagination__link--arrow"
-               href="?<?= e(http_build_query($baseQs + ['page' => 1])) ?>"
-               aria-label="Первая страница">«</a>
-            <a class="pagination__link pagination__link--arrow"
-               href="?<?= e(http_build_query($baseQs + ['page' => $pageNum - 1])) ?>"
-               aria-label="Предыдущая страница">‹</a>
-        <?php else: ?>
-            <span class="pagination__link pagination__link--arrow pagination__link--disabled">«</span>
-            <span class="pagination__link pagination__link--arrow pagination__link--disabled">‹</span>
-        <?php endif; ?>
+                    <?php if ($pageNum > 1): ?>
+                        <a class="pagination__link pagination__link--arrow"
+                           href="?<?= e(http_build_query($baseQs + ['page' => 1])) ?>"
+                           aria-label="Первая страница">«</a>
+                        <a class="pagination__link pagination__link--arrow"
+                           href="?<?= e(http_build_query($baseQs + ['page' => $pageNum - 1])) ?>"
+                           aria-label="Предыдущая страница">‹</a>
+                    <?php else: ?>
+                        <span class="pagination__link pagination__link--arrow pagination__link--disabled">«</span>
+                        <span class="pagination__link pagination__link--arrow pagination__link--disabled">‹</span>
+                    <?php endif; ?>
 
-        <?php // Первая страница + многоточие, если окно начинается не с 1 ?>
-        <?php if ($start > 1): ?>
-            <a class="pagination__link"
-               href="?<?= e(http_build_query($baseQs + ['page' => 1])) ?>">1</a>
-            <?php if ($start > 2): ?>
-                <span class="pagination__ellipsis">…</span>
+                    <?php if ($start > 1): ?>
+                        <a class="pagination__link"
+                           href="?<?= e(http_build_query($baseQs + ['page' => 1])) ?>">1</a>
+                        <?php if ($start > 2): ?>
+                            <span class="pagination__ellipsis">…</span>
+                        <?php endif; ?>
+                    <?php endif; ?>
+
+                    <?php for ($p = $start; $p <= $end; $p++): ?>
+                        <?php if ($p === $pageNum): ?>
+                            <span class="pagination__link pagination__link--active" aria-current="page"><?= $p ?></span>
+                        <?php else: ?>
+                            <a class="pagination__link"
+                               href="?<?= e(http_build_query($baseQs + ['page' => $p])) ?>"><?= $p ?></a>
+                        <?php endif; ?>
+                    <?php endfor; ?>
+
+                    <?php if ($end < $totalPages): ?>
+                        <?php if ($end < $totalPages - 1): ?>
+                            <span class="pagination__ellipsis">…</span>
+                        <?php endif; ?>
+                        <a class="pagination__link"
+                           href="?<?= e(http_build_query($baseQs + ['page' => $totalPages])) ?>"><?= $totalPages ?></a>
+                    <?php endif; ?>
+
+                    <?php if ($pageNum < $totalPages): ?>
+                        <a class="pagination__link pagination__link--arrow"
+                           href="?<?= e(http_build_query($baseQs + ['page' => $pageNum + 1])) ?>"
+                           aria-label="Следующая страница">›</a>
+                        <a class="pagination__link pagination__link--arrow"
+                           href="?<?= e(http_build_query($baseQs + ['page' => $totalPages])) ?>"
+                           aria-label="Последняя страница">»</a>
+                    <?php else: ?>
+                        <span class="pagination__link pagination__link--arrow pagination__link--disabled">›</span>
+                        <span class="pagination__link pagination__link--arrow pagination__link--disabled">»</span>
+                    <?php endif; ?>
+                </nav>
             <?php endif; ?>
-        <?php endif; ?>
-
-        <?php // Основное окно номеров ?>
-        <?php for ($p = $start; $p <= $end; $p++): ?>
-            <?php if ($p === $pageNum): ?>
-                <span class="pagination__link pagination__link--active" aria-current="page"><?= $p ?></span>
-            <?php else: ?>
-                <a class="pagination__link"
-                   href="?<?= e(http_build_query($baseQs + ['page' => $p])) ?>"><?= $p ?></a>
-            <?php endif; ?>
-        <?php endfor; ?>
-
-        <?php // Последняя страница + многоточие, если окно кончается раньше ?>
-        <?php if ($end < $totalPages): ?>
-            <?php if ($end < $totalPages - 1): ?>
-                <span class="pagination__ellipsis">…</span>
-            <?php endif; ?>
-            <a class="pagination__link"
-               href="?<?= e(http_build_query($baseQs + ['page' => $totalPages])) ?>"><?= $totalPages ?></a>
-        <?php endif; ?>
-
-        <?php // Стрелка вправо + «В конец» ?>
-        <?php if ($pageNum < $totalPages): ?>
-            <a class="pagination__link pagination__link--arrow"
-               href="?<?= e(http_build_query($baseQs + ['page' => $pageNum + 1])) ?>"
-               aria-label="Следующая страница">›</a>
-            <a class="pagination__link pagination__link--arrow"
-               href="?<?= e(http_build_query($baseQs + ['page' => $totalPages])) ?>"
-               aria-label="Последняя страница">»</a>
-        <?php else: ?>
-            <span class="pagination__link pagination__link--arrow pagination__link--disabled">›</span>
-            <span class="pagination__link pagination__link--arrow pagination__link--disabled">»</span>
-        <?php endif; ?>
-    </nav>
-<?php endif; ?>
         <?php endif; ?>
 
     <?php endif; ?>

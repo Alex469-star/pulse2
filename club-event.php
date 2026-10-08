@@ -4,6 +4,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/models/Club.php';
 require_once __DIR__ . '/models/ClubEvent.php';
+require_once __DIR__ . '/models/ClubEventComment.php';
 require_once __DIR__ . '/includes/ImageUploader.php';
 
 auth_start();
@@ -46,29 +47,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // ---- Загрузка фото (участник клуба) ----
-    if ($action === 'upload_photos' && $role && !empty($_FILES['photos'])) {
-        $files = club_event_collect_files($_FILES['photos']);
-        $uploaded = 0;
-        $errors = [];
-        foreach ($files as $file) {
-            if ($file['error'] !== UPLOAD_ERR_OK) continue;
-            try {
-                $url = ImageUploader::save($file, 'clubs/events', 2000, 2000, 10 * 1024 * 1024);
-                ClubEvent::addPhoto($eventId, (int)$me['id'], $url, $uploaded);
-                $uploaded++;
-            } catch (Throwable $e) {
-                $errors[] = $file['name'] . ': ' . $e->getMessage();
-            }
-        }
-        if ($uploaded > 0) {
-            $success = 'Загружено фотографий: ' . $uploaded;
-        }
-        if ($errors) {
-            $error = implode('; ', $errors);
-        }
-    }
-
     // ---- Удаление фото ----
     if ($action === 'delete_photo' && !empty($_POST['photo_id'])) {
         $ok = ClubEvent::deletePhoto((int)$_POST['photo_id'], $eventId, (int)($me['id'] ?? 0), $canManage);
@@ -81,7 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     redirect(url('club-event.php?id=' . $eventId . '#photos'));
 }
 
-// Данные
+// ---- Данные ----
 $photos = ClubEvent::photos($eventId);
 $attendees = ClubEvent::attendees($eventId);
 $myStatus = $me ? ClubEvent::myStatus($eventId, (int)$me['id']) : null;
@@ -93,24 +71,84 @@ $starts = strtotime((string)$event['starts_at']);
 $ends = $event['ends_at'] ? strtotime((string)$event['ends_at']) : null;
 $isPast = $starts < time();
 
+$eventComments = ClubEventComment::forEvent($eventId);
+
 function club_event_type_icon2(string $t): string {
     return match ($t) { 'training'=>'🏃','race'=>'🏆','meeting'=>'☕', default=>'📅' };
 }
 
-function club_event_collect_files(array $arr): array {
-    $out = [];
-    $count = is_array($arr['name']) ? count($arr['name']) : 0;
-    for ($i = 0; $i < $count; $i++) {
-        $out[] = [
-            'name'     => $arr['name'][$i],
-            'type'     => $arr['type'][$i],
-            'tmp_name' => $arr['tmp_name'][$i],
-            'error'    => $arr['error'][$i],
-            'size'     => $arr['size'][$i],
-        ];
-    }
-    return $out;
+/**
+ * Рекурсивный рендер дерева комментариев события.
+ */
+function render_event_comment(array $c, array $tree, ?array $me, bool $canManage, int $depth = 0): void
+{
+    $children  = $tree[(int)$c['id']] ?? [];
+    $meId      = $me ? (int)$me['id'] : 0;
+    $canEdit   = $meId > 0 && (int)$c['user_id'] === $meId;
+    $canDelete = $canEdit || $canManage;
+    ?>
+    <div class="comment <?= $depth > 0 ? 'comment--reply' : '' ?>"
+         id="comment-<?= (int)$c['id'] ?>"
+         data-comment-id="<?= (int)$c['id'] ?>">
+        <span class="avatar avatar--sm">
+            <?php if (!empty($c['avatar_url'])): ?>
+                <img src="<?= e($c['avatar_url']) ?>" alt="">
+            <?php else: ?>
+                <?= e(mb_substr((string)$c['display_name'], 0, 1)) ?>
+            <?php endif; ?>
+        </span>
+        <div class="comment__body">
+            <div class="comment__head">
+                <a href="<?= e(url('profile.php?u=' . urlencode((string)$c['username']))) ?>">
+                    <strong><?= e($c['display_name']) ?></strong>
+                </a>
+                <span class="comment__time muted"><?= e(time_ago((string)$c['created_at'])) ?></span>
+                <?php if (!empty($c['edited_at'])): ?>
+                    <span class="comment__edited muted"
+                          title="Изменено <?= e(date('d.m.Y H:i', strtotime((string)$c['edited_at']))) ?>">ред.</span>
+                <?php endif; ?>
+                <?php if ($meId > 0): ?>
+                    <button type="button"
+                            class="comment__reply js-event-reply-btn"
+                            data-comment-id="<?= (int)$c['id'] ?>"
+                            data-display-name="<?= e($c['display_name']) ?>"
+                            title="Ответить">↩ Ответить</button>
+                <?php endif; ?>
+                <?php if ($canEdit): ?>
+                    <button type="button"
+                            class="comment__edit js-event-edit-btn"
+                            data-comment-id="<?= (int)$c['id'] ?>"
+                            data-body="<?= e($c['body']) ?>"
+                            title="Редактировать">✏️</button>
+                <?php endif; ?>
+                <?php if ($canDelete): ?>
+                    <button type="button"
+                            class="comment__delete js-event-delete-btn"
+                            data-comment-id="<?= (int)$c['id'] ?>"
+                            title="Удалить">×</button>
+                <?php endif; ?>
+            </div>
+            <div class="comment__text js-comment-text"><?= nl2br(e($c['body'])) ?></div>
+
+            <?php if ($children): ?>
+                <div class="comment__children">
+                    <?php foreach ($children as $child): ?>
+                        <?php render_event_comment($child, $tree, $me, $canManage, $depth + 1); ?>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+    <?php
 }
+
+// Дерево комментариев
+$tree = [];
+foreach ($eventComments as $c) {
+    $pid = isset($c['parent_id']) && $c['parent_id'] !== null ? (int)$c['parent_id'] : 0;
+    $tree[$pid][] = $c;
+}
+$roots = $tree[0] ?? [];
 
 $pageTitle = $event['title'];
 $extraCss = [
@@ -198,50 +236,10 @@ require __DIR__ . '/includes/header.php';
                 <input type="hidden" name="action" value="rsvp">
                 <button name="status" value="going"   class="btn <?= $myStatus === 'going' ? 'btn--primary' : 'btn--ghost' ?>">✅ Иду</button>
                 <button name="status" value="maybe"   class="btn <?= $myStatus === 'maybe' ? 'btn--primary' : 'btn--ghost' ?>">❔ Возможно</button>
-                <button name="status" value="declined" class="btn <?= $myStatus === null ? 'btn--ghost' : 'btn--ghost' ?>">✕ Не смогу</button>
+                <button name="status" value="declined" class="btn btn--ghost">✕ Не смогу</button>
             </form>
         </div>
     <?php endif; ?>
-
-    <section class="club-event__section" id="photos">
-        <div class="club-event__section-head">
-            <h2>Фотографии <span class="muted">(<?= count($photos) ?>)</span></h2>
-            <?php if ($role): ?>
-                <form method="post" enctype="multipart/form-data" class="club-event__upload-form">
-                    <?= csrf_field() ?>
-                    <input type="hidden" name="action" value="upload_photos">
-                    <label class="btn btn--ghost btn--sm">
-                        📷 Добавить фото
-                        <input type="file" name="photos[]" accept="image/*,image/heic,image/heif,.heic,.heif"
-                               multiple hidden onchange="this.form.submit()">
-                    </label>
-                </form>
-            <?php endif; ?>
-        </div>
-
-        <?php if (!$photos): ?>
-            <p class="muted">Пока нет фотографий.</p>
-        <?php else: ?>
-            <div class="event-photos">
-                <?php foreach ($photos as $ph): ?>
-                    <div class="event-photo">
-                        <a href="<?= e($ph['url']) ?>" class="event-photo__link" data-photo-url="<?= e($ph['url']) ?>">
-                            <img src="<?= e($ph['url']) ?>" alt="" loading="lazy">
-                        </a>
-                        <?php if ($canManage || (int)$ph['user_id'] === (int)($me['id'] ?? 0)): ?>
-                            <form method="post" class="event-photo__delete"
-                                  onsubmit="return confirm('Удалить фото?')">
-                                <?= csrf_field() ?>
-                                <input type="hidden" name="action" value="delete_photo">
-                                <input type="hidden" name="photo_id" value="<?= (int)$ph['id'] ?>">
-                                <button title="Удалить">×</button>
-                            </form>
-                        <?php endif; ?>
-                    </div>
-                <?php endforeach; ?>
-            </div>
-        <?php endif; ?>
-    </section>
 
     <section class="club-event__section">
         <h2>Участники</h2>
@@ -268,8 +266,48 @@ require __DIR__ . '/includes/header.php';
             </div>
         <?php endif; ?>
     </section>
+
+    <!-- ============ КОММЕНТАРИИ ============ -->
+    <section class="club-event__section" id="comments">
+        <h2>Комментарии <span class="muted" id="event-comments-count">(<?= count($eventComments) ?>)</span></h2>
+
+        <div class="event-comments" id="event-comments">
+            <?php if (!$roots): ?>
+                <p class="muted" id="event-comments-empty">Пока нет комментариев. Будьте первым.</p>
+            <?php else: ?>
+                <?php foreach ($roots as $c): ?>
+                    <?php render_event_comment($c, $tree, $me, (bool)$canManage); ?>
+                <?php endforeach; ?>
+            <?php endif; ?>
+        </div>
+
+        <?php if ($me): ?>
+            <form class="comment-form" id="event-comment-form"
+                  method="post"
+                  action="javascript:void(0);"
+                  data-event-id="<?= $eventId ?>"
+                  data-api-add="<?= e(url('api/club-event-comment.php')) ?>">
+                <?= csrf_field() ?>
+                <input type="hidden" name="parent_id" id="event-comment-parent-id" value="">
+                <div class="comment-form__reply-hint" id="event-comment-reply-hint" hidden>
+                    Ответ на <strong id="event-comment-reply-name"></strong>
+                    <button type="button" class="comment-form__reply-cancel" id="event-comment-reply-cancel" aria-label="Отменить ответ">×</button>
+                </div>
+                <textarea name="body" rows="2" placeholder="Написать комментарий..." required maxlength="4000"></textarea>
+                <button class="btn btn--primary" type="submit">Отправить</button>
+            </form>
+        <?php else: ?>
+            <div class="activity-view__login-cta">
+                <a href="<?= e(url('login.php')) ?>" class="btn btn--primary">Войдите</a>, чтобы оставить комментарий.
+            </div>
+        <?php endif; ?>
+    </section>
 </section>
 
+<!-- ============================================================
+     JS: карта события
+     ============================================================ -->
+<?php if ($event['lat'] && $event['lng']): ?>
 <script>
 (function () {
     if (typeof L === "undefined") return;
@@ -279,6 +317,236 @@ require __DIR__ . '/includes/header.php';
     var map = L.map(el, { scrollWheelZoom: false }).setView([p.lat, p.lng], 15);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
     L.marker([p.lat, p.lng]).addTo(map);
+})();
+</script>
+<?php endif; ?>
+
+<!-- ============================================================
+     JS: комментарии
+     ============================================================ -->
+<script>
+(function () {
+    "use strict";
+
+    var form = document.getElementById("event-comment-form");
+    if (!form) return;
+
+    var apiAdd      = form.dataset.apiAdd;
+    var eventId     = form.dataset.eventId;
+    var apiEdit     = <?= json_encode(url('api/club-event-comment-edit.php')) ?>;
+    var apiDelete   = <?= json_encode(url('api/club-event-comment-delete.php')) ?>;
+    var csrf        = <?= json_encode(csrf_token()) ?>;
+    var commentsEl  = document.getElementById("event-comments");
+    var countEl     = document.getElementById("event-comments-count");
+    var emptyEl     = document.getElementById("event-comments-empty");
+
+    var parentInput = document.getElementById("event-comment-parent-id");
+    var hint        = document.getElementById("event-comment-reply-hint");
+    var hintName    = document.getElementById("event-comment-reply-name");
+    var cancelBtn   = document.getElementById("event-comment-reply-cancel");
+    var textarea    = form.querySelector("textarea[name=body]");
+
+    if (!apiAdd)     { console.error("event-comment-form: data-api-add пустой"); return; }
+    if (!eventId)    { console.error("event-comment-form: data-event-id пустой"); return; }
+    if (!commentsEl) { console.error("event-comments не найден"); return; }
+
+    function esc(s) {
+        return String(s == null ? "" : s)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/\x27/g, "&#039;");
+    }
+
+    function updateCount(delta) {
+        if (!countEl) return;
+        var m = countEl.textContent.match(/\d+/);
+        var n = (m ? parseInt(m[0], 10) : 0) + delta;
+        countEl.textContent = "(" + Math.max(0, n) + ")";
+    }
+
+    function bumpEmpty() {
+        if (emptyEl && commentsEl.querySelectorAll(".comment").length > 0) {
+            emptyEl.remove();
+        }
+    }
+
+    // --- Ответ ---
+    document.addEventListener("click", function (e) {
+        var btn = e.target.closest(".js-event-reply-btn");
+        if (!btn) return;
+        e.preventDefault();
+        parentInput.value = btn.dataset.commentId;
+        hintName.textContent = btn.dataset.displayName || "";
+        hint.hidden = false;
+        textarea.focus();
+        textarea.placeholder = "Ответ " + (btn.dataset.displayName || "") + "...";
+    });
+
+    if (cancelBtn) {
+        cancelBtn.addEventListener("click", function () {
+            parentInput.value = "";
+            hint.hidden = true;
+            textarea.placeholder = "Написать комментарий...";
+        });
+    }
+
+    // --- Отправка ---
+    form.addEventListener("submit", function (e) {
+        e.preventDefault();
+        var body = textarea.value.trim();
+        if (!body) return;
+
+        var submitBtn = form.querySelector("button[type=submit]");
+        if (submitBtn) submitBtn.disabled = true;
+
+        var payload = {
+            event_id: parseInt(eventId, 10),
+            body: body,
+            parent_id: parentInput.value ? parseInt(parentInput.value, 10) : null
+        };
+
+        fetch(apiAdd, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                "Content-Type": "application/json",
+                "X-CSRF-Token": csrf,
+                "Accept": "application/json"
+            },
+            body: JSON.stringify(payload)
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+            if (!res || !res.ok) { alert((res && res.error) || "Ошибка"); return; }
+            var c = res.data.comment;
+
+            var av = c.avatar_url
+                ? "<img src=\"" + esc(c.avatar_url) + "\" alt=\"\">"
+                : esc(c.initial);
+
+            var commentHtml =
+                "<div class=\"comment\" id=\"comment-" + c.id + "\" data-comment-id=\"" + c.id + "\">" +
+                    "<span class=\"avatar avatar--sm\">" + av + "</span>" +
+                    "<div class=\"comment__body\">" +
+                        "<div class=\"comment__head\">" +
+                            "<a href=\"" + esc(c.profile_url) + "\"><strong>" + esc(c.display_name) + "</strong></a>" +
+                            "<span class=\"comment__time muted\">" + esc(c.time_ago) + "</span>" +
+                            "<button type=\"button\" class=\"comment__reply js-event-reply-btn\" data-comment-id=\"" + c.id + "\" data-display-name=\"" + esc(c.display_name) + "\">↩ Ответить</button>" +
+                            "<button type=\"button\" class=\"comment__edit js-event-edit-btn\" data-comment-id=\"" + c.id + "\" data-body=\"" + esc(c.body) + "\">✏️</button>" +
+                            "<button type=\"button\" class=\"comment__delete js-event-delete-btn\" data-comment-id=\"" + c.id + "\">×</button>" +
+                        "</div>" +
+                        "<div class=\"comment__text js-comment-text\">" + esc(c.body).replace(/\n/g, "<br>") + "</div>" +
+                    "</div>" +
+                "</div>";
+
+            if (c.parent_id) {
+                var parentEl = commentsEl.querySelector(".comment[data-comment-id=\"" + c.parent_id + "\"]");
+                if (parentEl) {
+                    var childrenWrap = parentEl.querySelector(":scope > .comment__body > .comment__children");
+                    if (!childrenWrap) {
+                        childrenWrap = document.createElement("div");
+                        childrenWrap.className = "comment__children";
+                        parentEl.querySelector(":scope > .comment__body").appendChild(childrenWrap);
+                    }
+                    childrenWrap.insertAdjacentHTML("beforeend", commentHtml);
+                } else {
+                    commentsEl.insertAdjacentHTML("beforeend", commentHtml);
+                }
+            } else {
+                commentsEl.insertAdjacentHTML("beforeend", commentHtml);
+            }
+
+            textarea.value = "";
+            parentInput.value = "";
+            hint.hidden = true;
+            textarea.placeholder = "Написать комментарий...";
+            updateCount(1);
+            bumpEmpty();
+        })
+        .catch(function () { alert("Ошибка отправки"); })
+        .finally(function () { if (submitBtn) submitBtn.disabled = false; });
+    });
+
+    // --- Редактирование ---
+    document.addEventListener("click", function (e) {
+        var btn = e.target.closest(".js-event-edit-btn");
+        if (!btn) return;
+        e.preventDefault();
+        var commentId = btn.dataset.commentId;
+        var current = btn.dataset.body || "";
+
+        var wrap = btn.closest(".comment");
+        if (!wrap) return;
+        var textEl = wrap.querySelector(".js-comment-text");
+        if (!textEl) return;
+        if (textEl.dataset.editing === "1") return;
+        textEl.dataset.editing = "1";
+
+        var newBody = prompt("Редактировать комментарий:", current);
+        if (newBody === null) { textEl.dataset.editing = "0"; return; }
+        newBody = newBody.trim();
+        if (newBody === "" || newBody === current) { textEl.dataset.editing = "0"; return; }
+
+        fetch(apiEdit, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                "Content-Type": "application/json",
+                "X-CSRF-Token": csrf,
+                "Accept": "application/json"
+            },
+            body: JSON.stringify({ comment_id: parseInt(commentId, 10), body: newBody })
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+            if (!res || !res.ok) { alert((res && res.error) || "Ошибка"); return; }
+            textEl.innerHTML = esc(res.data.comment.body).replace(/\n/g, "<br>");
+
+            var head = wrap.querySelector(".comment__head");
+            if (head && !head.querySelector(".comment__edited")) {
+                var ed = document.createElement("span");
+                ed.className = "comment__edited muted";
+                ed.textContent = "ред.";
+                head.appendChild(ed);
+            }
+            btn.dataset.body = res.data.comment.body;
+        })
+        .catch(function () { alert("Ошибка сохранения"); })
+        .finally(function () { textEl.dataset.editing = "0"; });
+    });
+
+    // --- Удаление ---
+    document.addEventListener("click", function (e) {
+        var btn = e.target.closest(".js-event-delete-btn");
+        if (!btn) return;
+        e.preventDefault();
+        if (!confirm("Удалить комментарий? Ответы тоже будут удалены.")) return;
+
+        var commentId = btn.dataset.commentId;
+        fetch(apiDelete, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                "Content-Type": "application/json",
+                "X-CSRF-Token": csrf,
+                "Accept": "application/json"
+            },
+            body: JSON.stringify({ comment_id: parseInt(commentId, 10) })
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+            if (!res || !res.ok) { alert((res && res.error) || "Ошибка"); return; }
+            var wrap = btn.closest(".comment");
+            if (wrap) {
+                var n = wrap.querySelectorAll(".comment").length + 1;
+                wrap.remove();
+                updateCount(-n);
+            }
+        })
+        .catch(function () { alert("Ошибка удаления"); });
+    });
 })();
 </script>
 

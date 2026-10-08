@@ -50,13 +50,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $me) {
     $action = $_POST['action'] ?? '';
 
     if ($action === 'comment') {
-        $body = trim((string)($_POST['body'] ?? ''));
-        if ($body !== '') {
-            Post::addComment($postId, (int)$me['id'], $body);
-            flash('Комментарий добавлен', 'success');
-        }
-        redirect(url('post.php?id=' . $postId . '#comments'));
+    $body = trim((string)($_POST['body'] ?? ''));
+    $parentId = isset($_POST['parent_id']) && (int)$_POST['parent_id'] > 0
+        ? (int)$_POST['parent_id']
+        : null;
+    if ($body !== '') {
+        Post::addComment($postId, (int)$me['id'], $body, $parentId);
+        flash('Комментарий добавлен', 'success');
     }
+    redirect(url('post.php?id=' . $postId . '#comments'));
+}
 
     if ($action === 'delete_comment' && !empty($_POST['comment_id'])) {
         Post::deleteComment((int)$_POST['comment_id'], (int)$me['id']);
@@ -181,53 +184,99 @@ require __DIR__ . '/includes/header.php';
         Комментарии (<?= count($comments) ?>)
     </h2>
 
-    <div class="comments">
-        <?php if (!$comments): ?>
-            <div class="empty" style="padding:24px">
-                <p class="muted">Пока нет комментариев.</p>
-            </div>
-        <?php else: ?>
-            <?php foreach ($comments as $c): ?>
-                <?php $canDelete = $me && ((int)$me['id'] === (int)$c['user_id'] || $isOwner); ?>
-                <div class="comment">
-                    <span class="avatar avatar--sm">
-                        <?php if (!empty($c['avatar_url'])): ?>
-                            <img src="<?= e($c['avatar_url']) ?>" alt="">
-                        <?php else: ?>
-                            <?= e(mb_substr((string)$c['display_name'], 0, 1)) ?>
-                        <?php endif; ?>
-                    </span>
-                    <div class="comment__body">
-                        <div class="comment__head">
-                            <a href="<?= e(url('profile.php?u=' . urlencode((string)$c['username']))) ?>">
-                                <strong><?= e($c['display_name']) ?></strong>
-                            </a>
-                            <span class="comment__time muted"><?= e(time_ago((string)$c['created_at'])) ?></span>
-                            <?php if ($canDelete): ?>
-                                <form method="post" style="display:inline"
-                                      onsubmit="return confirm('Удалить комментарий?')">
-                                    <?= csrf_field() ?>
-                                    <input type="hidden" name="action" value="delete_comment">
-                                    <input type="hidden" name="comment_id" value="<?= (int)$c['id'] ?>">
-                                    <button class="comment__delete" title="Удалить">×</button>
-                                </form>
-                            <?php endif; ?>
-                        </div>
-                        <div><?= nl2br(e($c['body'])) ?></div>
-                    </div>
+    <?php
+/**
+ * Рекурсивный рендер дерева комментариев.
+ * $tree — массив: parent_id => [комментарии]
+ */
+if (!function_exists('render_post_comment')) {
+    function render_post_comment(array $c, array $tree, bool $isOwner, ?array $me, int $depth = 0): void
+    {
+        $canDelete = $me && ((int)$me['id'] === (int)$c['user_id'] || $isOwner);
+        $children  = $tree[(int)$c['id']] ?? [];
+        ?>
+        <div class="comment <?= $depth > 0 ? 'comment--reply' : '' ?>"
+             id="comment-<?= (int)$c['id'] ?>"
+             data-comment-id="<?= (int)$c['id'] ?>">
+            <span class="avatar avatar--sm">
+                <?php if (!empty($c['avatar_url'])): ?>
+                    <img src="<?= e($c['avatar_url']) ?>" alt="">
+                <?php else: ?>
+                    <?= e(mb_substr((string)$c['display_name'], 0, 1)) ?>
+                <?php endif; ?>
+            </span>
+            <div class="comment__body">
+                <div class="comment__head">
+                    <a href="<?= e(url('profile.php?u=' . urlencode((string)$c['username']))) ?>">
+                        <strong><?= e($c['display_name']) ?></strong>
+                    </a>
+                    <span class="comment__time muted"><?= e(time_ago((string)$c['created_at'])) ?></span>
+                    <?php if ($me): ?>
+                        <button type="button"
+                                class="comment__reply js-reply-btn"
+                                data-comment-id="<?= (int)$c['id'] ?>"
+                                data-display-name="<?= e($c['display_name']) ?>"
+                                title="Ответить">↩ Ответить</button>
+                    <?php endif; ?>
+                    <?php if ($canDelete): ?>
+                        <form method="post" style="display:inline"
+                              onsubmit="return confirm('Удалить комментарий?')">
+                            <?= csrf_field() ?>
+                            <input type="hidden" name="action" value="delete_comment">
+                            <input type="hidden" name="comment_id" value="<?= (int)$c['id'] ?>">
+                            <button class="comment__delete" title="Удалить">×</button>
+                        </form>
+                    <?php endif; ?>
                 </div>
-            <?php endforeach; ?>
-        <?php endif; ?>
-    </div>
+                <div><?= nl2br(e($c['body'])) ?></div>
+
+                <?php if ($children): ?>
+                    <div class="comment__children">
+                        <?php foreach ($children as $child): ?>
+                            <?php render_post_comment($child, $tree, $isOwner, $me, $depth + 1); ?>
+                        <?php endforeach; ?>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
+        <?php
+    }
+}
+
+// Строим дерево: parent_id => список комментариев
+$tree = [];
+foreach ($comments as $c) {
+    $pid = $c['parent_id'] !== null ? (int)$c['parent_id'] : 0;
+    $tree[$pid][] = $c;
+}
+$roots = $tree[0] ?? [];
+?>
+
+<div class="comments">
+    <?php if (!$roots): ?>
+        <div class="empty" style="padding:24px">
+            <p class="muted">Пока нет комментариев.</p>
+        </div>
+    <?php else: ?>
+        <?php foreach ($roots as $c): ?>
+            <?php render_post_comment($c, $tree, $isOwner, $me); ?>
+        <?php endforeach; ?>
+    <?php endif; ?>
+</div>
 
     <?php if ($me): ?>
-        <form method="post" class="comment-form">
-            <?= csrf_field() ?>
-            <input type="hidden" name="action" value="comment">
-            <textarea name="body" rows="2" placeholder="Написать комментарий..." required maxlength="1000"></textarea>
-            <button class="btn btn--primary">Отправить</button>
-        </form>
-    <?php else: ?>
+    <form method="post" class="comment-form" id="post-comment-form">
+        <?= csrf_field() ?>
+        <input type="hidden" name="action" value="comment">
+        <input type="hidden" name="parent_id" id="comment-parent-id" value="">
+        <div class="comment-form__reply-hint" id="comment-reply-hint" hidden>
+            Ответ на <strong id="comment-reply-name"></strong>
+            <button type="button" class="comment-form__reply-cancel" id="comment-reply-cancel" aria-label="Отменить ответ">×</button>
+        </div>
+        <textarea name="body" rows="2" placeholder="Написать комментарий..." required maxlength="1000"></textarea>
+        <button class="btn btn--primary">Отправить</button>
+    </form>
+<?php else: ?>
         <div class="activity-view__login-cta">
             <a href="<?= e(url('login.php')) ?>" class="btn btn--primary">Войдите</a>, чтобы оставить комментарий.
         </div>
@@ -451,6 +500,42 @@ require __DIR__ . '/includes/header.php';
         if (diff > 0) show(current - 1);
         else          show(current + 1);
     });
+})();
+
+/* ============================================================
+   ОТВЕТЫ НА КОММЕНТАРИИ
+   ============================================================ */
+(function () {
+    "use strict";
+
+    var form       = document.getElementById("post-comment-form");
+    if (!form) return;
+
+    var parentInput = document.getElementById("comment-parent-id");
+    var hint        = document.getElementById("comment-reply-hint");
+    var hintName    = document.getElementById("comment-reply-name");
+    var cancelBtn   = document.getElementById("comment-reply-cancel");
+    var textarea    = form.querySelector("textarea[name=body]");
+
+    document.addEventListener("click", function (e) {
+        var btn = e.target.closest(".js-reply-btn");
+        if (!btn) return;
+        e.preventDefault();
+
+        parentInput.value = btn.dataset.commentId;
+        hintName.textContent = btn.dataset.displayName || "";
+        hint.hidden = false;
+        textarea.focus();
+        textarea.placeholder = "Ответ " + (btn.dataset.displayName || "") + "...";
+    });
+
+    if (cancelBtn) {
+        cancelBtn.addEventListener("click", function () {
+            parentInput.value = "";
+            hint.hidden = true;
+            textarea.placeholder = "Написать комментарий...";
+        });
+    }
 })();
 </script>
 

@@ -517,6 +517,7 @@ window.__ROUTE_EDITOR__ = {
     osrmBase: 'https://router.project-osrm.org',
     nominatim: 'https://nominatim.openstreetmap.org',
     savedPlacesApi: <?= json_encode(url('api/saved-places.php')) ?>,
+    elevationApi: <?= json_encode(url('api/elevation.php')) ?>,  // <-- ДОБАВИТЬ
     csrf: <?= json_encode(csrf_token()) ?>,
     defaultCenter: [55.751244, 37.618423],
 };

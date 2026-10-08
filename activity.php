@@ -198,9 +198,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $me) {
 
     if ($action === 'comment') {
         $body = trim((string)($_POST['body'] ?? ''));
+        $parentId = isset($_POST['parent_id']) && (int)$_POST['parent_id'] > 0
+            ? (int)$_POST['parent_id']
+            : null;
         if ($body !== '') {
             try {
-                Comment::add($activityId, (int)$me['id'], $body);
+                Comment::add($activityId, (int)$me['id'], $body, $parentId);
                 flash('Комментарий добавлен', 'success');
             } catch (Throwable $e) {
                 flash('Ошибка: ' . $e->getMessage(), 'error');
@@ -281,7 +284,6 @@ if (!empty($activity['gear_id'])) {
 
 // ============================================================
 // РАНГИ И СТАТИСТИКА ПО СЕГМЕНТАМ
-// ВАЖНО: данные привязаны к ВЛАДЕЛЬЦУ активности, а не к текущему зрителю.
 // ============================================================
 $segmentRanks = [];
 $segmentStats = [];
@@ -326,7 +328,43 @@ if ($segments) {
 }
 
 // ============================================================
-// ТРЕК + ДАННЫЕ ДЛЯ ГРАФИКОВ
+// ХЕЛПЕР: СКОЛЬЗЯЩАЯ МЕДИАНА ДЛЯ ГРАФИКА СКОРОСТИ
+// ============================================================
+if (!function_exists('smoothSpeed')) {
+    /**
+     * Скользящая медиана по значению 'v' в массиве точек.
+     */
+    function smoothSpeed(array $data, int $window = 5): array
+    {
+        $n = count($data);
+        if ($n < 3 || $window < 3) return $data;
+
+        $half = intdiv($window, 2);
+        $out = [];
+
+        for ($i = 0; $i < $n; $i++) {
+            $from = max(0, $i - $half);
+            $to   = min($n - 1, $i + $half);
+
+            $vals = [];
+            for ($j = $from; $j <= $to; $j++) {
+                $vals[] = $data[$j]['v'];
+            }
+            sort($vals);
+            $median = $vals[intdiv(count($vals), 2)];
+
+            $out[] = [
+                'd' => $data[$i]['d'],
+                'v' => $median,
+            ];
+        }
+
+        return $out;
+    }
+}
+
+// ============================================================
+// ТРЕК + ДАННЫЕ ДЛЯ ГРАФИКОВ И СТАТИСТИКИ
 // ============================================================
 $track     = [];
 $elevData  = [];
@@ -341,6 +379,16 @@ $sensorAgg = [
     'cad' => ['min' => null, 'max' => null, 'avg' => null],
 ];
 
+$hasSpeedSource    = false;
+$hasDistanceSource = false;
+
+// Итоги, которые покажем в блоке цифр
+$calcDistanceM       = (float)($activity['distance_m'] ?? 0); // финальная дистанция
+$calcDurationSec     = (int)($activity['duration_sec'] ?? 0); // общее время
+$calcAvgSpeedMps     = null;  // средняя по движению
+$calcAvgWithStopsMps = null;  // средняя с остановками
+$calcStopTimeSec     = 0;     // время остановок
+
 if (!empty($activity['track_json'])) {
     $decoded = json_decode((string)$activity['track_json'], true);
     if (is_array($decoded)) {
@@ -349,14 +397,16 @@ if (!empty($activity['track_json'])) {
         foreach ($decoded as $p) {
             if (!isset($p['lat'], $p['lng'])) continue;
             $points[] = [
-                'lat'  => (float)$p['lat'],
-                'lng'  => (float)$p['lng'],
-                'ele'  => isset($p['ele'])  ? (float)$p['ele']  : null,
-                't'    => isset($p['t'])    ? (int)$p['t']      : null,
-                'hr'   => isset($p['hr'])   ? (int)$p['hr']     : null,
-                'cad'  => isset($p['cad'])  ? (int)$p['cad']    : null,
-                'pwr'  => isset($p['pwr'])  ? (int)$p['pwr']    : null,
-                'temp' => isset($p['temp']) ? (float)$p['temp'] : null,
+                'lat'      => (float)$p['lat'],
+                'lng'      => (float)$p['lng'],
+                'ele'      => isset($p['ele'])      ? (float)$p['ele']      : null,
+                't'        => isset($p['t'])        ? (int)$p['t']          : null,
+                'hr'       => isset($p['hr'])       ? (int)$p['hr']         : null,
+                'cad'      => isset($p['cad'])      ? (int)$p['cad']        : null,
+                'pwr'      => isset($p['pwr'])      ? (int)$p['pwr']        : null,
+                'temp'     => isset($p['temp'])     ? (float)$p['temp']     : null,
+                'speed'    => isset($p['speed'])    ? (float)$p['speed']    : null, // м/с
+                'distance' => isset($p['distance']) ? (float)$p['distance'] : null, // м
             ];
         }
 
@@ -380,17 +430,121 @@ if (!empty($activity['track_json'])) {
         $pwrSum = 0; $pwrCnt = 0;
         $cadSum = 0; $cadCnt = 0;
 
+        // Данные датчика скорости/дистанции
+        foreach ($points as $p) {
+            if ($p['distance'] !== null && $p['distance'] >= 0) { $hasDistanceSource = true; }
+            if ($p['speed'] !== null && $p['speed'] >= 0)       { $hasSpeedSource = true; }
+        }
+
+        // ---- Расчёт остановок ----
+        // Считаем точку «остановкой», если мгновенная скорость < 1 км/ч (0.28 м/с).
+        // Паузы короче 3 секунд игнорируем (это не остановка, а замедление).
+        // Если между двумя точками разрыв во времени > 5 минут — считаем это концом активности,
+        // а не остановкой (защита от многодневных пауз).
+        $movingTimeSec = 0;
+        $stopTimeSec   = 0;
+        $pauseStart    = null;
+        $prevT         = null;
+        $prevSpeedMps  = null;
+
         foreach ($points as $i => $p) {
-            if ($prev !== null) {
+            if ($p['t'] === null) continue;
+
+            // Мгновенная скорость точки
+            $v = null;
+            if ($hasSpeedSource && $p['speed'] !== null && $p['speed'] >= 0) {
+                $v = $p['speed'];
+            } elseif ($prev !== null && $p['t'] !== null && $prev['t'] !== null && $p['t'] > $prev['t']) {
+                $seg = $haversine($prev['lat'], $prev['lng'], $p['lat'], $p['lng']);
+                $v   = $seg / ($p['t'] - $prev['t']);
+            }
+
+            if ($prevT !== null && $p['t'] > $prevT) {
+                $dt = $p['t'] - $prevT;
+
+                // Разрыв > 5 минут — игнорируем как остановку
+                if ($dt > 300) {
+                    $dt = 0;
+                }
+
+                if ($v !== null && $v < 0.28) {
+                    // Это остановка
+                    if ($pauseStart === null) $pauseStart = $prevT;
+                    $stopTimeSec += $dt;
+                } else {
+                    // Движение
+                    if ($pauseStart !== null) {
+                        // Была пауза — если она меньше 3 секунд, считаем движением
+                        $pauseLen = $prevT - $pauseStart;
+                        if ($pauseLen < 3) {
+                            $stopTimeSec -= $pauseLen;
+                            $movingTimeSec += $pauseLen;
+                        }
+                        $pauseStart = null;
+                    }
+                    $movingTimeSec += $dt;
+                }
+            }
+
+            $prevT = $p['t'];
+            $prev  = $p;
+        }
+
+        // Если активность закончилась на паузе — она не считается остановкой
+        if ($pauseStart !== null) {
+            $stopTimeSec = max(0, $stopTimeSec - 0);
+        }
+
+        // ---- Итоговая дистанция ----
+        if ($hasDistanceSource) {
+            $last = end($points);
+            $calcDistanceM = (float)($last['distance'] ?? 0);
+        } else {
+            $calcDistanceM = 0.0;
+            $prevP = null;
+            foreach ($points as $p) {
+                if ($prevP !== null) {
+                    $calcDistanceM += $haversine($prevP['lat'], $prevP['lng'], $p['lat'], $p['lng']);
+                }
+                $prevP = $p;
+            }
+        }
+
+        // ---- Итоговое время ----
+        $calcDurationSec = $movingTimeSec + $stopTimeSec;
+
+        // ---- Средние скорости ----
+        if ($movingTimeSec > 0 && $calcDistanceM > 0) {
+            $calcAvgSpeedMps = $calcDistanceM / $movingTimeSec;
+        }
+        if ($calcDurationSec > 0 && $calcDistanceM > 0) {
+            $calcAvgWithStopsMps = $calcDistanceM / $calcDurationSec;
+        }
+        $calcStopTimeSec = (int)round($stopTimeSec);
+
+        // ---- Графики ----
+        $dist = 0.0;
+        $prev = null;
+
+        foreach ($points as $i => $p) {
+            // Накопленная дистанция
+            if ($hasDistanceSource && $p['distance'] !== null && $p['distance'] >= 0) {
+                $dist = max($dist, $p['distance']);
+            } elseif ($prev !== null) {
                 $dist += $haversine($prev['lat'], $prev['lng'], $p['lat'], $p['lng']);
             }
-            $prev = $p;
 
             if ($p['ele'] !== null) {
                 $elevData[] = ['d' => round($dist, 1), 'ele' => round($p['ele'], 1)];
             }
 
-            if ($p['t'] !== null && $i > 0 && $points[$i - 1]['t'] !== null) {
+            // Скорость
+            if ($hasSpeedSource && $p['speed'] !== null && $p['speed'] >= 0) {
+                $speedKmh = $p['speed'] * 3.6;
+                if ($speedKmh < 120) {
+                    $speedData[] = ['d' => round($dist, 1), 'v' => round($speedKmh, 2)];
+                }
+            } elseif ($p['t'] !== null && $i > 0 && $points[$i - 1]['t'] !== null) {
                 $dt = $p['t'] - $points[$i - 1]['t'];
                 if ($dt > 0) {
                     $seg = $haversine(
@@ -398,7 +552,8 @@ if (!empty($activity['track_json'])) {
                         $p['lat'], $p['lng']
                     );
                     $speed = $seg / $dt;
-                    if ($speed < 30) {
+                    $limitMps = ($activity['type'] === 'ride') ? 22.0 : 13.9;
+                    if ($speed < $limitMps) {
                         $speedData[] = ['d' => round($dist, 1), 'v' => round($speed * 3.6, 2)];
                     }
                 }
@@ -424,11 +579,17 @@ if (!empty($activity['track_json'])) {
                 if ($sensorAgg['cad']['min'] === null || $p['cad'] < $sensorAgg['cad']['min']) $sensorAgg['cad']['min'] = $p['cad'];
                 if ($sensorAgg['cad']['max'] === null || $p['cad'] > $sensorAgg['cad']['max']) $sensorAgg['cad']['max'] = $p['cad'];
             }
+
+            $prev = $p;
         }
 
         if ($hrCnt)  $sensorAgg['hr']['avg']  = (int)round($hrSum / $hrCnt);
         if ($pwrCnt) $sensorAgg['pwr']['avg'] = (int)round($pwrSum / $pwrCnt);
         if ($cadCnt) $sensorAgg['cad']['avg'] = (int)round($cadSum / $cadCnt);
+
+        if ($speedData && !$hasSpeedSource) {
+            $speedData = smoothSpeed($speedData, 5);
+        }
 
         $decimate = static function (array $data, int $maxPoints = 800): array {
             $n = count($data);
@@ -472,15 +633,27 @@ $shareTitle = rawurlencode((string)$activity['title']);
 
 $totalDistance = !empty($elevData) ? (float)end($elevData)['d'] : 0.0;
 
+$csrfJson      = json_encode(csrf_token());
+$likersApiJson = json_encode(url('api/activity-likers.php'));
+$likeApiJson   = json_encode(url('api/like.php'));
+$trackJson     = json_encode($track, JSON_UNESCAPED_UNICODE);
+$elevJson      = json_encode($elevData, JSON_UNESCAPED_UNICODE);
+$speedJson     = json_encode($speedData, JSON_UNESCAPED_UNICODE);
+$hrJson        = json_encode($hrData, JSON_UNESCAPED_UNICODE);
+$pwrJson       = json_encode($pwrData, JSON_UNESCAPED_UNICODE);
+$cadJson       = json_encode($cadData, JSON_UNESCAPED_UNICODE);
+$totalDJson    = json_encode($totalDistance);
+$publicUrlJson = json_encode($publicUrl);
+
 $inlineJs = '
-window.__ACTIVITY_TRACK__   = ' . json_encode($track, JSON_UNESCAPED_UNICODE) . ';
-window.__ACTIVITY_ELEV__    = ' . json_encode($elevData, JSON_UNESCAPED_UNICODE) . ';
-window.__ACTIVITY_SPEED__   = ' . json_encode($speedData, JSON_UNESCAPED_UNICODE) . ';
-window.__ACTIVITY_HR__      = ' . json_encode($hrData, JSON_UNESCAPED_UNICODE) . ';
-window.__ACTIVITY_PWR__     = ' . json_encode($pwrData, JSON_UNESCAPED_UNICODE) . ';
-window.__ACTIVITY_CAD__     = ' . json_encode($cadData, JSON_UNESCAPED_UNICODE) . ';
-window.__ACTIVITY_TOTAL_D__ = ' . json_encode($totalDistance) . ';
-window.__ACTIVITY_URL__     = ' . json_encode($publicUrl) . ';
+window.__ACTIVITY_TRACK__   = ' . $trackJson . ';
+window.__ACTIVITY_ELEV__    = ' . $elevJson . ';
+window.__ACTIVITY_SPEED__   = ' . $speedJson . ';
+window.__ACTIVITY_HR__      = ' . $hrJson . ';
+window.__ACTIVITY_PWR__     = ' . $pwrJson . ';
+window.__ACTIVITY_CAD__     = ' . $cadJson . ';
+window.__ACTIVITY_TOTAL_D__ = ' . $totalDJson . ';
+window.__ACTIVITY_URL__     = ' . $publicUrlJson . ';
 
 /* ============================================================
    КАРТА LEAFLET
@@ -534,7 +707,7 @@ document.addEventListener("click", function (e) {
    ============================================================ */
 (function () {
     "use strict";
-    var apiUrl = ' . json_encode(url('api/activity-likers.php')) . ';
+    var apiUrl = ' . $likersApiJson . ';
     var cache = {};
     function el(id) { return document.getElementById(id); }
 
@@ -618,7 +791,7 @@ document.addEventListener("click", function (e) {
 })();
 
 /* ============================================================
-   ГРАФИКИ
+   ГРАФИКИ + СИНХРОНИЗАЦИЯ ТОЧКИ НА КАРТЕ
    ============================================================ */
 (function () {
     if (typeof Chart === "undefined") return;
@@ -764,15 +937,23 @@ document.addEventListener("click", function (e) {
         });
     }
 
+    /* ---- Синхронизация: наведение на график → точка на карте ---- */
     (function () {
         var map = window.__ACTIVITY_MAP__;
         var track = window.__ACTIVITY_TRACK__ || [];
         if (!map || !track.length) return;
+
         var marker = L.circleMarker([track[0].lat, track[0].lng], {
-            radius: 7, color: "#1f5fc4", fillColor: "#1f5fc4",
-            fillOpacity: 1, weight: 2, opacity: 0
+            radius: 7,
+            color: "#1f5fc4",
+            fillColor: "#1f5fc4",
+            fillOpacity: 1,
+            weight: 2,
+            opacity: 0
         }).addTo(map);
+
         var totalTrackIdx = track.length - 1;
+
         function showAtDistance(dist) {
             if (totalD <= 0) return;
             var ratio = Math.max(0, Math.min(1, dist / totalD));
@@ -782,30 +963,41 @@ document.addEventListener("click", function (e) {
             marker.setLatLng([p.lat, p.lng]);
             marker.setStyle({ opacity: 1 });
         }
-        function hide() { marker.setStyle({ opacity: 0 }); }
+
+        function hide() {
+            marker.setStyle({ opacity: 0 });
+        }
+
         function attach(canvasId) {
             var canvas = document.getElementById(canvasId);
             if (!canvas) return;
+
             canvas.addEventListener("mousemove", function (e) {
                 var chart = Chart.getChart(canvas);
                 if (!chart) return;
+
                 var rect = canvas.getBoundingClientRect();
                 var x = e.clientX - rect.left;
+
                 var meta = chart.getDatasetMeta(0);
                 var elements = meta.data;
                 if (!elements.length) return;
+
                 var closest = 0, minDist = Infinity;
                 for (var i = 0; i < elements.length; i++) {
                     var dx = Math.abs(elements[i].x - x);
                     if (dx < minDist) { minDist = dx; closest = i; }
                 }
+
                 var label = chart.data.labels[closest];
                 if (typeof label === "number") showAtDistance(label);
             });
+
             canvas.addEventListener("mouseleave", hide);
             canvas.addEventListener("touchend", hide);
         }
-        ["elev-chart","speed-chart","hr-chart","pwr-chart","cad-chart"].forEach(attach);
+
+        ["elev-chart", "speed-chart", "hr-chart", "pwr-chart", "cad-chart"].forEach(attach);
     })();
 })();
 
@@ -814,8 +1006,8 @@ document.addEventListener("click", function (e) {
    ============================================================ */
 (function () {
     "use strict";
-    var csrf = ' . json_encode(csrf_token()) . ';
-    var likeApi = ' . json_encode(url('api/like.php')) . ';
+    var csrf = ' . $csrfJson . ';
+    var likeApi = ' . $likeApiJson . ';
 
     document.querySelectorAll(".js-like-btn").forEach(function (btn) {
         btn.addEventListener("click", function () {
@@ -871,6 +1063,12 @@ function format_gap_from_leader(?int $gapSec): string {
     $m = intdiv($gapSec, 60);
     $s = $gapSec % 60;
     return '+' . $m . ':' . str_pad((string)$s, 2, '0', STR_PAD_LEFT);
+}
+if (!function_exists('format_speed_kmh')) {
+    function format_speed_kmh(?float $mps): string {
+        if ($mps === null || $mps <= 0) return '—';
+        return number_format($mps * 3.6, 1, '.', '');
+    }
 }
 
 $aggHrAvg  = $activity['avg_hr']      ?? $sensorAgg['hr']['avg']  ?? null;
@@ -1022,19 +1220,23 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
         <div class="activity-stats-grid">
             <div class="activity-stat-card">
                 <div class="activity-stat-card__label">Дистанция</div>
-                <div class="activity-stat-card__value"><?= e(format_distance((float)$activity['distance_m'])) ?></div>
+                <div class="activity-stat-card__value"><?= e(format_distance($calcDistanceM)) ?></div>
             </div>
             <div class="activity-stat-card">
                 <div class="activity-stat-card__label">Время</div>
-                <div class="activity-stat-card__value"><?= e(format_duration((int)$activity['duration_sec'])) ?></div>
+                <div class="activity-stat-card__value"><?= e(format_duration($calcDurationSec)) ?></div>
             </div>
             <div class="activity-stat-card">
-                <div class="activity-stat-card__label"><?= $activity['type'] === 'ride' ? 'Средняя' : 'Темп' ?></div>
+                <div class="activity-stat-card__label">Средняя</div>
                 <div class="activity-stat-card__value">
-                    <?php if ($activity['type'] === 'ride' && $activity['avg_speed_mps']): ?>
+                    <?php if ($calcAvgSpeedMps !== null): ?>
+                        <?= e(format_speed_kmh($calcAvgSpeedMps)) ?> <small>км/ч</small>
+                    <?php elseif ($activity['type'] === 'ride' && $activity['avg_speed_mps']): ?>
                         <?= number_format((float)$activity['avg_speed_mps'] * 3.6, 1, '.', '') ?> <small>км/ч</small>
+                    <?php elseif ($activity['type'] !== 'ride'): ?>
+                        <?= e(format_pace($calcDistanceM, $calcDurationSec)) ?>
                     <?php else: ?>
-                        <?= e(format_pace((float)$activity['distance_m'], (int)$activity['duration_sec'])) ?>
+                        —
                     <?php endif; ?>
                 </div>
             </div>
@@ -1043,6 +1245,26 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
                 <div class="activity-stat-card__value"><?= $activity['elevation_gain_m'] ? (int)$activity['elevation_gain_m'] . ' <small>м</small>' : '—' ?></div>
             </div>
         </div>
+
+        <?php if ($calcDurationSec > 0 && ($calcStopTimeSec > 0 || $calcAvgWithStopsMps !== null)): ?>
+            <div class="activity-stats-grid activity-stats-grid--sensors">
+                <div class="activity-stat-card activity-stat-card--sensor">
+                    <div class="activity-stat-card__icon">⏱</div>
+                    <div class="activity-stat-card__label">Средняя с остановками</div>
+                    <div class="activity-stat-card__value">
+                        <?= $calcAvgWithStopsMps !== null ? e(format_speed_kmh($calcAvgWithStopsMps)) : '—' ?>
+                        <small>км/ч</small>
+                    </div>
+                </div>
+                <div class="activity-stat-card activity-stat-card--sensor">
+                    <div class="activity-stat-card__icon">⏸</div>
+                    <div class="activity-stat-card__label">Время остановок</div>
+                    <div class="activity-stat-card__value">
+                        <?= e(format_duration($calcStopTimeSec)) ?>
+                    </div>
+                </div>
+            </div>
+        <?php endif; ?>
 
         <?php if ($hasSensors): ?>
             <div class="activity-stats-grid activity-stats-grid--sensors">
@@ -1086,20 +1308,50 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
             </div>
         <?php endif; ?>
 
-        <?php if ($activityPhotos): ?>
+        <?php if ($activityPhotos || $isOwner): ?>
             <div class="activity-card">
-                <h2 class="activity-card__title">Фотографии (<?= count($activityPhotos) ?>)</h2>
-                <div class="activity-gallery" id="activity-gallery">
-                    <?php foreach ($activityPhotos as $i => $ph): ?>
-                        <button type="button"
-                                class="activity-gallery__item"
-                                data-index="<?= $i ?>"
-                                data-photo-url="<?= e($ph['url']) ?>"
-                                aria-label="Открыть фото <?= $i + 1 ?> из <?= count($activityPhotos) ?>">
-                            <img src="<?= e($ph['url']) ?>" alt="" loading="lazy">
-                        </button>
-                    <?php endforeach; ?>
+                <div class="activity-card__head-row">
+                    <h2 class="activity-card__title">Фотографии (<?= count($activityPhotos) ?>)</h2>
+                    <?php if ($isOwner): ?>
+                        <label class="btn btn--ghost btn--sm activity-photo-add-label">
+                            📷 Добавить фото
+                            <input type="file"
+                                   id="activity-photo-input"
+                                   accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                                   multiple
+                                   hidden>
+                        </label>
+                    <?php endif; ?>
                 </div>
+
+                <?php if ($activityPhotos): ?>
+                    <div class="activity-gallery" id="activity-gallery">
+                        <?php foreach ($activityPhotos as $i => $ph): ?>
+                            <div class="activity-gallery__wrap" data-photo-id="<?= (int)$ph['id'] ?>">
+                                <button type="button"
+                                        class="activity-gallery__item"
+                                        data-index="<?= $i ?>"
+                                        data-photo-url="<?= e($ph['url']) ?>"
+                                        aria-label="Открыть фото <?= $i + 1 ?> из <?= count($activityPhotos) ?>">
+                                    <img src="<?= e($ph['url']) ?>" alt="" loading="lazy">
+                                </button>
+                                <?php if ($isOwner): ?>
+                                    <button type="button"
+                                            class="activity-gallery__delete js-photo-delete"
+                                            data-photo-id="<?= (int)$ph['id'] ?>"
+                                            title="Удалить фото">×</button>
+                                <?php endif; ?>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                <?php else: ?>
+                    <p class="muted">Фотографий пока нет.</p>
+                <?php endif; ?>
+
+                <div class="activity-photo-progress" id="activity-photo-progress" hidden>
+                    <div class="activity-photo-progress__bar" id="activity-photo-progress-bar"></div>
+                </div>
+                <div class="activity-photo-status muted" id="activity-photo-status" hidden></div>
             </div>
         <?php endif; ?>
 
@@ -1180,10 +1432,10 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
                     <?php foreach ($segments as $s): ?>
                         <?php
                             $segId         = (int)$s['segment_id'];
-                            $ownerRank     = $segmentRanks[$segId] ?? null;   // ранг владельца активности
+                            $ownerRank     = $segmentRanks[$segId] ?? null;
                             $segStat       = $segmentStats[$segId] ?? ['efforts' => 0, 'athletes' => 0];
                             $bestTime      = $segmentBestTimes[$segId] ?? null;
-                            $ownerTime     = (int)$s['elapsed_time_sec'];     // время владельца на сегменте
+                            $ownerTime     = (int)$s['elapsed_time_sec'];
                             $ownerIsLeader = ($ownerRank === 1);
 
                             $gapSec = null;
@@ -1273,49 +1525,90 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
         <div class="activity-card" id="comments">
             <h2 class="activity-card__title">Комментарии (<?= count($comments) ?>)</h2>
 
+            <?php
+            if (!function_exists('render_activity_comment')) {
+                function render_activity_comment(array $c, array $tree, bool $isOwner, ?array $me, int $depth = 0): void
+                {
+                    $canDelete = $me && ((int)$me['id'] === (int)$c['user_id'] || $isOwner);
+                    $children  = $tree[(int)$c['id']] ?? [];
+                    ?>
+                    <div class="comment <?= $depth > 0 ? 'comment--reply' : '' ?>"
+                         id="comment-<?= (int)$c['id'] ?>"
+                         data-comment-id="<?= (int)$c['id'] ?>">
+                        <span class="avatar avatar--sm">
+                            <?php if (!empty($c['avatar_url'])): ?>
+                                <img src="<?= e($c['avatar_url']) ?>" alt="">
+                            <?php else: ?>
+                                <?= e(mb_substr((string)$c['display_name'], 0, 1)) ?>
+                            <?php endif; ?>
+                        </span>
+                        <div class="comment__body">
+                            <div class="comment__head">
+                                <a href="<?= e(url('profile.php?u=' . urlencode((string)$c['username']))) ?>">
+                                    <strong><?= e($c['display_name']) ?></strong>
+                                </a>
+                                <span class="comment__time muted"><?= e(time_ago((string)$c['created_at'])) ?></span>
+                                <?php if ($me): ?>
+                                    <button type="button"
+                                            class="comment__reply js-reply-btn"
+                                            data-comment-id="<?= (int)$c['id'] ?>"
+                                            data-display-name="<?= e($c['display_name']) ?>"
+                                            title="Ответить">↩ Ответить</button>
+                                <?php endif; ?>
+                                <?php if ($canDelete): ?>
+                                    <form method="post" style="display:inline"
+                                          onsubmit="return confirm('Удалить комментарий?')">
+                                        <?= csrf_field() ?>
+                                        <input type="hidden" name="action" value="delete_comment">
+                                        <input type="hidden" name="comment_id" value="<?= (int)$c['id'] ?>">
+                                        <button class="comment__delete" title="Удалить">×</button>
+                                    </form>
+                                <?php endif; ?>
+                            </div>
+                            <div><?= nl2br(e($c['body'])) ?></div>
+
+                            <?php if ($children): ?>
+                                <div class="comment__children">
+                                    <?php foreach ($children as $child): ?>
+                                        <?php render_activity_comment($child, $tree, $isOwner, $me, $depth + 1); ?>
+                                    <?php endforeach; ?>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <?php
+                }
+            }
+
+            $tree = [];
+            foreach ($comments as $c) {
+                $pid = isset($c['parent_id']) && $c['parent_id'] !== null ? (int)$c['parent_id'] : 0;
+                $tree[$pid][] = $c;
+            }
+            $roots = $tree[0] ?? [];
+            ?>
+
             <div class="comments">
-                <?php if (!$comments): ?>
+                <?php if (!$roots): ?>
                     <div class="empty" style="padding:24px">
                         <p class="muted">Пока нет комментариев.</p>
                     </div>
                 <?php else: ?>
-                    <?php foreach ($comments as $c): ?>
-                        <?php $canDelete = $me && ((int)$me['id'] === (int)$c['user_id'] || $isOwner); ?>
-                        <div class="comment">
-                            <span class="avatar avatar--sm">
-                                <?php if (!empty($c['avatar_url'])): ?>
-                                    <img src="<?= e($c['avatar_url']) ?>" alt="">
-                                <?php else: ?>
-                                    <?= e(mb_substr((string)$c['display_name'], 0, 1)) ?>
-                                <?php endif; ?>
-                            </span>
-                            <div class="comment__body">
-                                <div class="comment__head">
-                                    <a href="<?= e(url('profile.php?u=' . urlencode((string)$c['username']))) ?>">
-                                        <strong><?= e($c['display_name']) ?></strong>
-                                    </a>
-                                    <span class="comment__time muted"><?= e(time_ago((string)$c['created_at'])) ?></span>
-                                    <?php if ($canDelete): ?>
-                                        <form method="post" style="display:inline"
-                                              onsubmit="return confirm('Удалить комментарий?')">
-                                            <?= csrf_field() ?>
-                                            <input type="hidden" name="action" value="delete_comment">
-                                            <input type="hidden" name="comment_id" value="<?= (int)$c['id'] ?>">
-                                            <button class="comment__delete" title="Удалить">×</button>
-                                        </form>
-                                    <?php endif; ?>
-                                </div>
-                                <div><?= nl2br(e($c['body'])) ?></div>
-                            </div>
-                        </div>
+                    <?php foreach ($roots as $c): ?>
+                        <?php render_activity_comment($c, $tree, $isOwner, $me); ?>
                     <?php endforeach; ?>
                 <?php endif; ?>
             </div>
 
             <?php if ($me): ?>
-                <form method="post" class="comment-form">
+                <form method="post" class="comment-form" id="activity-comment-form">
                     <?= csrf_field() ?>
                     <input type="hidden" name="action" value="comment">
+                    <input type="hidden" name="parent_id" id="comment-parent-id" value="">
+                    <div class="comment-form__reply-hint" id="comment-reply-hint" hidden>
+                        Ответ на <strong id="comment-reply-name"></strong>
+                        <button type="button" class="comment-form__reply-cancel" id="comment-reply-cancel" aria-label="Отменить ответ">×</button>
+                    </div>
                     <textarea name="body" rows="2" placeholder="Написать комментарий..." required maxlength="1000"></textarea>
                     <button class="btn btn--primary">Отправить</button>
                 </form>
@@ -1429,5 +1722,143 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
 })();
 </script>
 <?php endif; ?>
+
+<script>
+/* ============================================================
+   ОТВЕТЫ НА КОММЕНТАРИИ
+   ============================================================ */
+(function () {
+    "use strict";
+    var form = document.getElementById("activity-comment-form");
+    if (!form) return;
+
+    var parentInput = document.getElementById("comment-parent-id");
+    var hint        = document.getElementById("comment-reply-hint");
+    var hintName    = document.getElementById("comment-reply-name");
+    var cancelBtn   = document.getElementById("comment-reply-cancel");
+    var textarea    = form.querySelector("textarea[name=body]");
+
+    document.addEventListener("click", function (e) {
+        var btn = e.target.closest(".js-reply-btn");
+        if (!btn) return;
+        e.preventDefault();
+        parentInput.value = btn.dataset.commentId;
+        hintName.textContent = btn.dataset.displayName || "";
+        hint.hidden = false;
+        textarea.focus();
+        textarea.placeholder = "Ответ " + (btn.dataset.displayName || "") + "...";
+    });
+
+    if (cancelBtn) {
+        cancelBtn.addEventListener("click", function () {
+            parentInput.value = "";
+            hint.hidden = true;
+            textarea.placeholder = "Написать комментарий...";
+        });
+    }
+})();
+
+/* ============================================================
+   ЗАГРУЗКА ФОТО
+   ============================================================ */
+(function () {
+    "use strict";
+    var input = document.getElementById("activity-photo-input");
+    if (!input) return;
+
+    var progress    = document.getElementById("activity-photo-progress");
+    var progressBar = document.getElementById("activity-photo-progress-bar");
+    var statusEl    = document.getElementById("activity-photo-status");
+
+    var csrf       = <?= json_encode(csrf_token()) ?>;
+    var apiUrl     = <?= json_encode(url('api/add-activity-photo.php')) ?>;
+    var activityId = <?= (int)$activityId ?>;
+
+    input.addEventListener("change", function () {
+        var files = Array.from(input.files || []);
+        if (!files.length) return;
+
+        if (progress) progress.hidden = false;
+        if (statusEl) { statusEl.hidden = false; statusEl.textContent = "Загрузка 0 / " + files.length; }
+        if (progressBar) progressBar.style.width = "0%";
+
+        var done = 0, okCount = 0, failCount = 0;
+
+        function uploadNext(i) {
+            if (i >= files.length) {
+                if (statusEl) statusEl.textContent = "Готово: " + okCount + " загружено" + (failCount ? ", " + failCount + " с ошибкой" : "");
+                if (progressBar) progressBar.style.width = "100%";
+                setTimeout(function () { window.location.reload(); }, 600);
+                return;
+            }
+            var fd = new FormData();
+            fd.append("activity_id", activityId);
+            fd.append("csrf", csrf);
+            fd.append("file", files[i]);
+
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", apiUrl, true);
+            xhr.withCredentials = true;
+            xhr.setRequestHeader("X-CSRF-Token", csrf);
+            xhr.setRequestHeader("Accept", "application/json");
+
+            xhr.upload.addEventListener("progress", function (e) {
+                if (!e.lengthComputable || !progressBar) return;
+                var overall = (i + e.loaded / e.total) / files.length;
+                progressBar.style.width = Math.round(overall * 100) + "%";
+            });
+            xhr.addEventListener("load", function () {
+                var res = null;
+                try { res = JSON.parse(xhr.responseText); } catch (err) {}
+                if (xhr.status >= 200 && xhr.status < 300 && res && res.ok) okCount++;
+                else { failCount++; console.warn("Upload failed:", res && res.error); }
+                done++;
+                if (statusEl) statusEl.textContent = "Загрузка " + done + " / " + files.length;
+                uploadNext(i + 1);
+            });
+            xhr.addEventListener("error", function () {
+                failCount++; done++;
+                if (statusEl) statusEl.textContent = "Ошибка сети: " + done + " / " + files.length;
+                uploadNext(i + 1);
+            });
+            xhr.send(fd);
+        }
+        uploadNext(0);
+        input.value = "";
+    });
+})();
+
+/* ============================================================
+   УДАЛЕНИЕ ФОТО
+   ============================================================ */
+(function () {
+    "use strict";
+    var apiUrl     = <?= json_encode(url('api/activity-photo-delete.php')) ?>;
+    var csrf       = <?= json_encode(csrf_token()) ?>;
+    var activityId = <?= (int)$activityId ?>;
+
+    document.addEventListener("click", function (e) {
+        var btn = e.target.closest(".js-photo-delete");
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (!confirm("Удалить это фото?")) return;
+
+        fetch(apiUrl, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf, "Accept": "application/json" },
+            body: JSON.stringify({ photo_id: btn.dataset.photoId, activity_id: activityId })
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+            if (!res || !res.ok) { alert((res && res.error) || "Ошибка удаления"); return; }
+            var wrap = btn.closest(".activity-gallery__wrap");
+            if (wrap) wrap.remove();
+        })
+        .catch(function () { alert("Ошибка сети"); });
+    });
+})();
+</script>
 
 <?php require __DIR__ . '/includes/footer.php'; ?>
