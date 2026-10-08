@@ -5,9 +5,6 @@ require_once __DIR__ . '/GpxParser.php';
 
 class TcxParser
 {
-    /**
-     * Парсит TCX-файл.
-     */
     public static function parse(string $filePath): array
     {
         if (!is_readable($filePath)) {
@@ -21,15 +18,12 @@ class TcxParser
         libxml_use_internal_errors($prevErrors);
 
         if ($xml === false) {
-            $msg = $xmlErrors
-                ? trim($xmlErrors[0]->message)
-                : 'не удалось распарсить XML';
+            $msg = $xmlErrors ? trim($xmlErrors[0]->message) : 'не удалось распарсить XML';
             throw new RuntimeException('TCX: ' . $msg);
         }
 
         $points = [];
 
-        // Основной формат: Activities > Activity > Lap > Track > Trackpoint
         if (isset($xml->Activities)) {
             foreach ($xml->Activities->Activity as $activity) {
                 foreach ($activity->Lap as $lap) {
@@ -43,7 +37,6 @@ class TcxParser
             }
         }
 
-        // Альтернатива: Courses > Course > Track > Trackpoint
         if (!$points && isset($xml->Courses)) {
             foreach ($xml->Courses->Course as $course) {
                 foreach ($course->Track as $track) {
@@ -55,42 +48,28 @@ class TcxParser
             }
         }
 
-        if (count($points) < 2) {
-            throw new RuntimeException('TCX: не найдено достаточно GPS-точек (минимум 2)');
+        if (!$points) {
+            throw new RuntimeException('TCX: не найдено ни одной точки (ни GPS, ни датчиков)');
         }
 
         return GpxParser::summarize($points);
     }
 
-    /**
-     * Разбирает одну точку TCX, включая метрики датчиков.
-     *
-     * Поля TCX v2:
-     *   <Time>
-     *   <Position><LatitudeDegrees>…</Position>
-     *   <AltitudeMeters>
-     *   <HeartRateBpm><Value>…</Value></HeartRateBpm>
-     *   <Cadence>
-     *   <Extensions>
-     *     <TPX xmlns="http://www.garmin.com/xmlschemas/ActivityExtension/v2">
-     *       <Watts>…</Watts>
-     *       <Temp>…</Temp>
-     *     </TPX>
-     *   </Extensions>
-     */
     private static function parseTrackpoint(SimpleXMLElement $tp): ?array
     {
-        if (!isset($tp->Position)) return null;
+        $lat = null;
+        $lng = null;
 
-        $lat = isset($tp->Position->LatitudeDegrees)
-            ? (float)$tp->Position->LatitudeDegrees
-            : null;
-        $lng = isset($tp->Position->LongitudeDegrees)
-            ? (float)$tp->Position->LongitudeDegrees
-            : null;
-
-        if ($lat === null || $lng === null) return null;
-        if ($lat < -90 || $lat > 90 || $lng < -180 || $lng > 180) return null;
+        if (isset($tp->Position)) {
+            $latV = isset($tp->Position->LatitudeDegrees) ? (float)$tp->Position->LatitudeDegrees : null;
+            $lngV = isset($tp->Position->LongitudeDegrees) ? (float)$tp->Position->LongitudeDegrees : null;
+            if ($latV !== null && $lngV !== null
+                && $latV >= -90 && $latV <= 90
+                && $lngV >= -180 && $lngV <= 180) {
+                $lat = round($latV, 6);
+                $lng = round($lngV, 6);
+            }
+        }
 
         $ele = null;
         if (isset($tp->AltitudeMeters)) {
@@ -104,52 +83,58 @@ class TcxParser
             if ($t !== false && $t > 0) $time = $t;
         }
 
-        // ---- Пульс ----
         $hr = null;
         if (isset($tp->HeartRateBpm->Value)) {
             $v = (int)$tp->HeartRateBpm->Value;
             if ($v > 0 && $v < 250) $hr = $v;
         }
 
-        // ---- Каденс ----
         $cad = null;
         if (isset($tp->Cadence)) {
             $v = (int)$tp->Cadence;
             if ($v > 0 && $v < 300) $cad = $v;
         }
 
-        // ---- Мощность и температура (в Extensions/TPX) ----
-        $pwr  = null;
-        $temp = null;
+        $distance = null;
+        if (isset($tp->DistanceMeters)) {
+            $v = (float)$tp->DistanceMeters;
+            if ($v >= 0) $distance = $v;
+        }
+
+        $pwr   = null;
+        $temp  = null;
+        $speed = null;
 
         if (isset($tp->Extensions)) {
-            self::readExtensions($tp->Extensions, $pwr, $temp);
+            self::readExtensions($tp->Extensions, $pwr, $temp, $speed);
+        }
+
+        // Если вообще ничего — вернём null
+        if ($lat === null && $time === null && $ele === null
+            && $hr === null && $cad === null && $distance === null
+            && $pwr === null && $temp === null && $speed === null) {
+            return null;
         }
 
         return [
-            'lat'  => round($lat, 6),
-            'lng'  => round($lng, 6),
-            'ele'  => $ele,
-            't'    => $time,
-            'hr'   => $hr,
-            'cad'  => $cad,
-            'pwr'  => $pwr,
-            'temp' => $temp,
+            'lat'      => $lat,
+            'lng'      => $lng,
+            'ele'      => $ele,
+            't'        => $time,
+            'hr'       => $hr,
+            'cad'      => $cad,
+            'pwr'      => $pwr,
+            'temp'     => $temp,
+            'speed'    => $speed,
+            'distance' => $distance,
         ];
     }
 
-    /**
-     * Читает Extensions/TPX: мощность и температуру.
-     *
-     * Разные версии TCX используют разные namespace'ы, поэтому пробуем несколько:
-     *   - http://www.garmin.com/xmlschemas/ActivityExtension/v2
-     *   - http://www.garmin.com/xmlschemas/ActivityExtension/v1
-     *   - http://www.garmin.com/xmlschemas/ActivityExtension/v2 (без суффикса)
-     */
     private static function readExtensions(
         SimpleXMLElement $extensions,
         ?int &$pwr,
-        ?float &$temp
+        ?float &$temp,
+        ?float &$speed
     ): void {
         $namespaces = [
             'http://www.garmin.com/xmlschemas/ActivityExtension/v2',
@@ -167,11 +152,14 @@ class TcxParser
                 $v = (float)$ext->TPX->Temp;
                 if ($v > -50 && $v < 60) $temp = $v;
             }
+            if ($speed === null && isset($ext->TPX->Speed)) {
+                $v = (float)$ext->TPX->Speed;
+                if ($v >= 0 && $v < 100) $speed = $v;
+            }
 
-            if ($pwr !== null && $temp !== null) return;
+            if ($pwr !== null && $temp !== null && $speed !== null) return;
         }
 
-        // Fallback: некоторые экспортёры пишут Extensions без namespace
         if ($pwr === null && isset($extensions->TPX->Watts)) {
             $v = (int)$extensions->TPX->Watts;
             if ($v > 0 && $v < 2500) $pwr = $v;
@@ -179,6 +167,10 @@ class TcxParser
         if ($temp === null && isset($extensions->TPX->Temp)) {
             $v = (float)$extensions->TPX->Temp;
             if ($v > -50 && $v < 60) $temp = $v;
+        }
+        if ($speed === null && isset($extensions->TPX->Speed)) {
+            $v = (float)$extensions->TPX->Speed;
+            if ($v >= 0 && $v < 100) $speed = $v;
         }
     }
 }

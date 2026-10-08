@@ -38,58 +38,58 @@ class SegmentMatcher
         $activityType = (string)$activity['type'];
         $userId       = (int)$activity['user_id'];
 
+                // ---- 1. Только ID сегментов ----
         $stmt = db()->prepare(
-            'SELECT id, track_json, distance_m, type
-             FROM segments
+            'SELECT id FROM segments
              WHERE is_public = 1 AND type = ?
              LIMIT 2000'
         );
         $stmt->execute([$activityType]);
-        $segments = $stmt->fetchAll();
+        $segmentIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
-        if (!$segments) return $result;
+        if (!$segmentIds) return $result;
 
-        foreach ($segments as $segment) {
+        $selectSeg = db()->prepare(
+            'SELECT id, track_json, distance_m, type
+             FROM segments WHERE id = ? LIMIT 1'
+        );
+
+        foreach ($segmentIds as $segmentId) {
+            $segmentId = (int)$segmentId;
             $result['checked']++;
-            $segmentId = (int)$segment['id'];
 
             try {
+                $selectSeg->execute([$segmentId]);
+                $segment = $selectSeg->fetch();
+                if (!$segment) continue;
+
                 $segmentTrack = Segment::parseTrackJson((string)$segment['track_json']);
-                if (count($segmentTrack) < 2) continue;
+                unset($segment);
+
+                if (count($segmentTrack) < 2) { unset($segmentTrack); continue; }
 
                 $segmentLength = self::trackLength($segmentTrack);
-                if ($segmentLength < self::MIN_SEGMENT_LENGTH_M) continue;
+                if ($segmentLength < self::MIN_SEGMENT_LENGTH_M) { unset($segmentTrack); continue; }
 
                 $start  = $segmentTrack[0];
                 $finish = $segmentTrack[count($segmentTrack) - 1];
+                unset($segmentTrack);
 
-                $match = self::matchActivityToSegment(
-                    $activityTrack,
-                    $start,
-                    $finish,
-                    (int)$segmentLength
-                );
+                $match = self::matchActivityToSegment($activityTrack, $start, $finish, (int)$segmentLength);
 
                 if ($match === null) {
                     self::deleteAutoEffort($segmentId, $activityId);
-                    // Возможно, лидер поменялся после удаления усилия
                     try { Segment::notifyLeadershipChange($segmentId); } catch (Throwable $e) {}
                     continue;
                 }
 
                 self::saveAutoEffort(
-                    $segmentId,
-                    $activityId,
-                    $userId,
-                    $match['elapsed_sec'],
-                    $match['started_at'],
-                    $match['matched_distance_m'],
-                    $match['quality']
+                    $segmentId, $activityId, $userId,
+                    $match['elapsed_sec'], $match['started_at'],
+                    $match['matched_distance_m'], $match['quality']
                 );
 
-                // Уведомление только при фактической смене лидера
                 try { Segment::notifyLeadershipChange($segmentId); } catch (Throwable $e) {}
-
                 $result['matched']++;
             } catch (Throwable $e) {
                 $result['errors'][] = 'Сегмент #' . $segmentId . ': ' . $e->getMessage();
@@ -103,7 +103,7 @@ class SegmentMatcher
     // 2. МАТЧ ОДНОГО СЕГМЕНТА ПО ВСЕМ АКТИВНОСТЯМ ВСЕХ ЮЗЕРОВ
     // ============================================================
 
-    public static function matchAllUsersForSegment(int $segmentId, ?int $onlyUserId = null): array
+        public static function matchAllUsersForSegment(int $segmentId, ?int $onlyUserId = null): array
     {
         $result = ['processed' => 0, 'matched' => 0, 'errors' => []];
 
@@ -128,7 +128,8 @@ class SegmentMatcher
         $start  = $segmentTrack[0];
         $finish = $segmentTrack[count($segmentTrack) - 1];
 
-        $sql = 'SELECT id, user_id, track_json, started_at
+        // ---- 1. Только ID активностей, без track_json ----
+        $sql = 'SELECT id
                 FROM activities
                 WHERE type = ? AND track_json IS NOT NULL';
         $params = [(string)$segment['type']];
@@ -142,16 +143,40 @@ class SegmentMatcher
 
         $stmt = db()->prepare($sql);
         $stmt->execute($params);
-        $activities = $stmt->fetchAll();
+        $activityIds = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        unset($stmt);
 
-        foreach ($activities as $activity) {
+        if (!$activityIds) return $result;
+
+        // ---- 2. Обрабатываем по одной, грузим track_json точечно ----
+        $selectOne = db()->prepare(
+            'SELECT id, user_id, track_json
+             FROM activities
+             WHERE id = ? LIMIT 1'
+        );
+
+        foreach ($activityIds as $activityId) {
+            $activityId = (int)$activityId;
             $result['processed']++;
-            $activityId = (int)$activity['id'];
-            $userId     = (int)$activity['user_id'];
 
             try {
+                $selectOne->execute([$activityId]);
+                $activity = $selectOne->fetch();
+
+                if (!$activity || empty($activity['track_json'])) {
+                    continue;
+                }
+
+                $userId = (int)$activity['user_id'];
                 $activityTrack = json_decode((string)$activity['track_json'], true);
-                if (!is_array($activityTrack) || count($activityTrack) < 2) continue;
+
+                // освобождаем память сразу
+                unset($activity['track_json'], $activity);
+
+                if (!is_array($activityTrack) || count($activityTrack) < 2) {
+                    unset($activityTrack);
+                    continue;
+                }
 
                 $match = self::matchActivityToSegment(
                     $activityTrack,
@@ -159,6 +184,9 @@ class SegmentMatcher
                     $finish,
                     (int)$segmentLength
                 );
+
+                // освобождаем трек сразу после матчинга
+                unset($activityTrack);
 
                 if ($match === null) {
                     self::deleteAutoEffort($segmentId, $activityId);
@@ -180,8 +208,6 @@ class SegmentMatcher
             }
         }
 
-        // После матчинга — проверить, изменился ли лидер.
-        // Метод сам решит, слать ли уведомление, сравнивая с сохранённым в БД.
         try {
             Segment::notifyLeadershipChange($segmentId);
         } catch (Throwable $e) {}
