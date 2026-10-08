@@ -138,6 +138,35 @@ function str_short(?string $text, int $limit = 200, string $suffix = '…'): str
 }
 
 /* ============================================================
+   МЕСЯЦЫ (РУССКИЙ)
+   ============================================================ */
+
+if (!function_exists('profile_month_ru')) {
+    function profile_month_ru(int $month): string
+    {
+        $months = [
+            1  => 'январь', 2  => 'февраль', 3  => 'март',
+            4  => 'апрель', 5  => 'май',     6  => 'июнь',
+            7  => 'июль',   8  => 'август',  9  => 'сентябрь',
+            10 => 'октябрь', 11 => 'ноябрь', 12 => 'декабрь',
+        ];
+        return $months[$month] ?? '';
+    }
+}
+
+if (!function_exists('profile_month_ru_short')) {
+    function profile_month_ru_short(int $month): string
+    {
+        $months = [
+            1  => 'янв', 2  => 'фев', 3  => 'мар', 4  => 'апр',
+            5  => 'май', 6  => 'июн', 7  => 'июл', 8  => 'авг',
+            9  => 'сен', 10 => 'окт', 11 => 'ноя', 12 => 'дек',
+        ];
+        return $months[$month] ?? '';
+    }
+}
+
+/* ============================================================
    ТЕКУЩАЯ СТРАНИЦА
    ============================================================ */
 
@@ -394,4 +423,3 @@ function http_request(string $method, string $url, array $options = []): array
         'json'   => is_array($json) ? $json : null,
     ];
 }
-
