@@ -1,0 +1,6 @@
+*/10 * * * * /usr/bin/php /var/www/www-root/data/www/roadrunnersteam.ru/pulse/bin/heatmap-build-cron.php 500 >> /var/www/www-root/data/www/roadrunnersteam.ru/pulse/storage/heatmap.log 2>&1
+
+
+
+
+php bin/heatmap-build-cron.php 1000
