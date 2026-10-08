@@ -27,6 +27,8 @@
         lastElevations: [],
         lastLabels: [],
         lastTrackPoints: [],
+        // Кэш высот: ключ "lat,lng" -> elevation
+        elevationCache: {},
     };
 
     var layers = {
@@ -581,17 +583,70 @@
         } catch (e) { return false; }
     }
 
-    // ============================================================
-    // ПРОФИЛЬ ВЫСОТ — Open Topo Data (SRTM 90m)
+        // ============================================================
+    // ПРОФИЛЬ ВЫСОТ — через собственный API (api/elevation.php)
     // ============================================================
     var elevationTimer = null;
     var elevationReqId = 0;
+
+    // URL вашего API. Можно задать в CFG, но подставим дефолт.
+    var ELEVATION_API_URL = CFG.elevationApi || (CFG.baseUrl ? CFG.baseUrl + '/api/elevation.php' : '/api/elevation.php');
 
     function updateElevationDebounced() {
         if (elevationTimer) clearTimeout(elevationTimer);
         elevationTimer = setTimeout(function () {
             updateElevation();
-        }, 1200); // Open Topo Data: 1 запрос в секунду
+        }, 800);
+    }
+
+    /**
+     * Запрашивает высоты через наш серверный прокси.
+     * Сервер сам разобьёт точки на чанки по 100 и обратится к Open-Elevation.
+     * @param {Array<{lat:number,lng:number}>} points
+     * @returns {Promise<Array<{lat:number,lng:number,ele:number}>>}
+     */
+    async function fetchElevations(points) {
+        if (!points || points.length < 2) return points;
+
+        // Отправляем только lat/lng
+        var payload = {
+            points: points.map(function (p) {
+                return { lat: p.lat, lng: p.lng };
+            })
+        };
+
+        var response = await fetch(ELEVATION_API_URL, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "X-CSRF-Token": CFG.csrf || "",
+            },
+            body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+            throw new Error("HTTP " + response.status);
+        }
+
+        var data = await response.json();
+
+        // Ваш API возвращает { ok: true, data: { points: [...] } }
+        // или { ok: true, points: [...] } — уточните под свой формат json_ok()
+        var resultPoints = null;
+        if (data && data.ok) {
+            if (data.data && Array.isArray(data.data.points)) {
+                resultPoints = data.data.points;
+            } else if (Array.isArray(data.points)) {
+                resultPoints = data.points;
+            }
+        }
+
+        if (!resultPoints || !resultPoints.length) {
+            throw new Error((data && data.error) || "Пустой ответ от сервиса высот");
+        }
+
+        return resultPoints;
     }
 
     function updateElevation() {
@@ -609,10 +664,21 @@
             return;
         }
 
-        // Прореживаем до 100 точек — лимит Open Topo Data
+        // Если у всех точек уже есть высота — просто рисуем
+        var hasAllEle = pts.every(function (p) {
+            return typeof p.ele === "number" && !isNaN(p.ele) && p.ele !== 0;
+        });
+        if (hasAllEle) {
+            renderElevationChart(pts);
+            return;
+        }
+
+        // Прореживаем до 100 точек (лимит Open-Elevation за один запрос)
         var step = Math.max(1, Math.ceil(pts.length / 100));
         var sampled = [];
-        for (var i = 0; i < pts.length; i += step) sampled.push(pts[i]);
+        for (var i = 0; i < pts.length; i += step) {
+            sampled.push(pts[i]);
+        }
         if (sampled[sampled.length - 1] !== pts[pts.length - 1]) {
             sampled.push(pts[pts.length - 1]);
         }
@@ -620,56 +686,34 @@
             sampled = sampled.slice(0, 100);
         }
 
-        // Уже есть валидные высоты — рисуем без запроса
-        var hasEle = sampled.every(function (p) {
-            return typeof p.ele === "number" && p.ele !== 0;
-        });
-        if (hasEle) {
-            renderElevationChart(sampled);
-            return;
-        }
-
         if (panel) panel.hidden = false;
         var statsEl = document.getElementById("elev-stats");
         if (statsEl) statsEl.innerHTML = "<span>Загружаем высоты…</span>";
 
-        // Формируем locations: lat,lng|lat,lng|...
-        var locations = sampled.map(function (p) {
-            return p.lat.toFixed(5) + "," + p.lng.toFixed(5);
-        }).join("|");
-
-        var url = "https://api.opentopodata.org/v1/srtm90m?locations=" + locations;
         var myReqId = ++elevationReqId;
 
-        fetch(url, { method: "GET" })
-            .then(function (r) {
-                if (!r.ok) throw new Error("HTTP " + r.status);
-                return r.json();
-            })
-            .then(function (data) {
-                if (myReqId !== elevationReqId) return;
+        fetchElevations(sampled)
+            .then(function (withEle) {
+                if (myReqId !== elevationReqId) return; // Устаревший запрос
 
-                if (!data || data.status !== "OK" || !Array.isArray(data.results)) {
-                    throw new Error("Нет данных о высотах");
-                }
-
-                var elevations = data.results.map(function (item) {
-                    return (item && typeof item.elevation === "number") ? item.elevation : 0;
-                });
-
-                if (!elevations.length) {
-                    throw new Error("Пустой ответ");
-                }
-
-                var nonZero = elevations.filter(function (e) { return e !== 0; }).length;
+                var nonZero = withEle.filter(function (p) {
+                    return typeof p.ele === "number" && p.ele !== 0;
+                }).length;
                 if (nonZero < 2) {
-                    throw new Error("Высоты равны нулю");
+                    throw new Error("Сервис высот вернул нулевые значения");
                 }
 
-                var withEle = sampled.map(function (p, i) {
-                    var ele = typeof elevations[i] === "number" ? elevations[i] : 0;
-                    return { lat: p.lat, lng: p.lng, ele: ele };
-                });
+                // Записываем высоты обратно в targetArray
+                var targetArray = state.snappedTrack.length >= 2 ? state.snappedTrack : state.points;
+                var sampleIdx = 0;
+                for (var i = 0; i < targetArray.length && sampleIdx < sampled.length; i++) {
+                    if (targetArray[i] === sampled[sampleIdx]) {
+                        if (withEle[sampleIdx] && typeof withEle[sampleIdx].ele === "number") {
+                            targetArray[i].ele = withEle[sampleIdx].ele;
+                        }
+                        sampleIdx++;
+                    }
+                }
 
                 renderElevationChart(withEle);
                 setStatus("Маршрут готов");
@@ -678,10 +722,8 @@
                 if (myReqId !== elevationReqId) return;
                 console.error("Elevation:", e);
                 if (statsEl) {
-                    statsEl.innerHTML = "<span style='color:#b3261e'>" + esc(e.message) + "</span>";
+                    statsEl.innerHTML = "<span style='color:#b3261e'>Не удалось загрузить высоты: " + esc(e.message) + "</span>";
                 }
-                var fallbackPanel = document.getElementById("elevation-panel");
-                if (fallbackPanel) fallbackPanel.hidden = true;
                 setStatus("Высоты недоступны");
             });
     }

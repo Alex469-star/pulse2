@@ -293,3 +293,155 @@ document.querySelectorAll('.feature, .cta, .activity-card').forEach((el) => {
 
     syncUI();
 })();
+
+/* ============================================================
+   УВЕДОМЛЕНИЯ В ХИДЕРЕ БЕЗ ПЕРЕЗАГРУЗКИ
+   ============================================================ */
+(function () {
+    "use strict";
+
+    var bell = document.getElementById("notif-bell");
+    var badge = document.getElementById("notif-badge");
+    if (!bell || !badge) return;
+
+    var apiUrl = bell.dataset.notifApi;
+    if (!apiUrl) return;
+
+    var POLL_INTERVAL = 20000; // 20 сек
+    var latestId = 0;
+    var firstLoad = true;
+    var timerId = null;
+    var lastUnread = parseInt(badge.textContent, 10) || 0;
+
+    // --- Контейнер для тостов ---
+    var toastWrap = document.getElementById("notif-toasts");
+    if (!toastWrap) {
+        toastWrap = document.createElement("div");
+        toastWrap.id = "notif-toasts";
+        toastWrap.className = "notif-toasts";
+        document.body.appendChild(toastWrap);
+    }
+
+    function escapeHtml(s) {
+        return String(s == null ? "" : s)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/\x27/g, "&#039;");
+    }
+
+    function updateBadge(count) {
+        count = parseInt(count, 10) || 0;
+        if (count > 0) {
+            badge.hidden = false;
+            badge.textContent = count > 99 ? "99+" : String(count);
+            if (count > lastUnread) {
+                badge.classList.remove("badge--pulse");
+                void badge.offsetWidth;
+                badge.classList.add("badge--pulse");
+                setTimeout(function () { badge.classList.remove("badge--pulse"); }, 1500);
+            }
+        } else {
+            badge.hidden = true;
+            badge.textContent = "0";
+        }
+        lastUnread = count;
+    }
+
+    function toastText(item) {
+        var actor = item.actor_name ? "<strong>" + escapeHtml(item.actor_name) + "</strong>" : "";
+        switch (item.type) {
+            case "like":               return actor + " оценил вашу активность";
+            case "comment":            return actor + " оставил комментарий";
+            case "comment_reply":      return actor + " ответил на ваш комментарий";
+            case "follow":             return actor + " подписался на вас";
+            case "mention":            return actor + " упомянул вас";
+            case "post_like":          return actor + " оценил вашу запись";
+            case "post_comment":       return actor + " оставил комментарий к записи";
+            case "post_comment_reply": return actor + " ответил на ваш комментарий к записи";
+            case "segment_new_lead":   return "Вы вышли на <strong>1-е место</strong> на сегменте";
+            case "segment_lost_lead":  return actor + " обошёл вас на сегменте";
+            case "club_join":          return escapeHtml(item.message || (actor + " вступил в клуб"));
+            case "club_post":          return escapeHtml(item.message || (actor + " написал на стене клуба"));
+            case "club_role":          return escapeHtml(item.message || "Ваша роль в клубе изменена");
+            case "club_event":         return escapeHtml(item.message || "Новое событие в клубе");
+            case "system":             return escapeHtml(item.message || "Системное уведомление");
+            default:                   return escapeHtml(item.message || "Уведомление");
+        }
+    }
+
+    function showToast(item) {
+        var toast = document.createElement("a");
+        toast.className = "notif-toast";
+        toast.href = item.url || "#";
+        toast.innerHTML =
+            '<span class="notif-toast__icon">🔔</span>' +
+            '<span class="notif-toast__body">' +
+                '<span class="notif-toast__text">' + toastText(item) + '</span>' +
+                '<span class="notif-toast__time">' + escapeHtml(item.time_ago || "только что") + '</span>' +
+            '</span>';
+
+        toast.addEventListener("click", function () {
+            markRead(item.id);
+        });
+
+        toastWrap.appendChild(toast);
+        requestAnimationFrame(function () {
+            toast.classList.add("is-visible");
+        });
+        setTimeout(function () {
+            toast.classList.remove("is-visible");
+            setTimeout(function () { toast.remove(); }, 300);
+        }, 6000);
+    }
+
+    function markRead(id) {
+        fetch(apiUrl, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                "Content-Type": "application/json",
+                "X-CSRF-Token": window.__CSRF__ || "",
+                "Accept": "application/json"
+            },
+            body: JSON.stringify({ action: "mark_read", id: id })
+        }).catch(function () {});
+    }
+
+    function poll() {
+        var url = apiUrl + "?since_id=" + encodeURIComponent(latestId) + "&limit=10";
+        fetch(url, {
+            credentials: "same-origin",
+            headers: { "Accept": "application/json" }
+        })
+        .then(function (r) { return r.json(); })
+        .then(function (res) {
+            if (!res || !res.ok) return;
+            var data = res.data || {};
+            updateBadge(data.unread || 0);
+
+            if (data.latest_id) latestId = data.latest_id;
+
+            if (firstLoad) { firstLoad = false; return; }
+
+            var items = data.items || [];
+            items.slice(0, 3).forEach(function (it, idx) {
+                setTimeout(function () { showToast(it); }, idx * 250);
+            });
+        })
+        .catch(function () {});
+    }
+
+    poll();
+    timerId = setInterval(poll, POLL_INTERVAL);
+
+    document.addEventListener("visibilitychange", function () {
+        if (document.hidden) {
+            if (timerId) { clearInterval(timerId); timerId = null; }
+        } else {
+            poll();
+            if (!timerId) timerId = setInterval(poll, POLL_INTERVAL);
+        }
+    });
+})();

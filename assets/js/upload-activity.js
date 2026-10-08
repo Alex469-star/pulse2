@@ -4,9 +4,9 @@
  * Алгоритм:
  *   1. Собираем файлы активностей и фото из формы.
  *   2. Последовательно отправляем файлы активностей на api/upload-activity.php.
- *   3. Для каждого фото — отдельный запрос на api/upload-activity-photo.php,
- *      привязанный к первой созданной активности.
- *   4. Обновляем прогресс-бар и статус.
+ *   3. Для каждого фото — отдельный запрос на api/upload-activity-photo.php.
+ *   4. Если API отвечает 409 — файл помечается как «пропущен» (дубликат).
+ *   5. Обновляем прогресс-бар и статус.
  */
 (function () {
     "use strict";
@@ -14,27 +14,27 @@
     var form = document.getElementById("upload-form");
     if (!form) return;
 
-    var filesInput = document.getElementById("files");
-    var photosInput = document.getElementById("photos");
-    var titleInput = document.getElementById("title");
-    var typeInput = document.getElementById("type");
+    var filesInput      = document.getElementById("files");
+    var photosInput     = document.getElementById("photos");
+    var titleInput      = document.getElementById("title");
+    var typeInput       = document.getElementById("type");
     var visibilityInput = document.getElementById("visibility");
-    var gearInput = document.getElementById("gear_id");
+    var gearInput       = document.getElementById("gear_id");
 
-    var submitBtn = document.getElementById("upload-submit");
-    var resultsBox = document.getElementById("upload-results");
-    var progressBox = document.getElementById("upload-progress");
-    var progressBar = document.getElementById("upload-progress-bar");
+    var submitBtn    = document.getElementById("upload-submit");
+    var resultsBox   = document.getElementById("upload-results");
+    var progressBox  = document.getElementById("upload-progress");
+    var progressBar  = document.getElementById("upload-progress-bar");
     var progressText = document.getElementById("upload-progress-text");
     var progressHint = document.getElementById("upload-progress-hint");
 
     if (!filesInput || !submitBtn) return;
 
     var API_ACTIVITY = form.dataset.apiActivity;
-var API_PHOTO = form.dataset.apiPhoto;
-var CSRF = form.dataset.csrf;
-var ACTIVITY_URL = form.dataset.activityUrl;
-var FEED_URL = form.dataset.feedUrl;
+    var API_PHOTO    = form.dataset.apiPhoto;
+    var CSRF         = form.dataset.csrf;
+    var ACTIVITY_URL = form.dataset.activityUrl;
+    var FEED_URL     = form.dataset.feedUrl;
 
     var heicConverterAvailable = typeof heic2any !== "undefined";
 
@@ -86,10 +86,14 @@ var FEED_URL = form.dataset.feedUrl;
             .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
     }
 
-    /* ---------- Отправка одного файла с прогрессом ---------- */
+    /* ---------- Отправка одного файла ---------- */
 
+    /**
+     * Возвращает Promise с объектом { ok: bool, status: int, data: {}, error: string }.
+     * Не reject-ит на HTTP-ошибки — это позволяет отличить 409 (дубликат) от сетевой ошибки.
+     */
     function uploadFile(url, file, fields, onProgress) {
-        return new Promise(function (resolve, reject) {
+        return new Promise(function (resolve) {
             var xhr = new XMLHttpRequest();
             xhr.open("POST", url, true);
             xhr.withCredentials = true;
@@ -105,16 +109,26 @@ var FEED_URL = form.dataset.feedUrl;
             xhr.onload = function () {
                 var data = null;
                 try { data = JSON.parse(xhr.responseText); } catch (e) {}
+
                 if (xhr.status >= 200 && xhr.status < 300 && data && data.ok) {
-                    resolve(data.data || {});
+                    resolve({ ok: true, status: xhr.status, data: data.data || {}, error: null });
                 } else {
                     var msg = (data && data.error) || ("HTTP " + xhr.status);
-                    reject(new Error(msg));
+                    resolve({
+                        ok: false,
+                        status: xhr.status,
+                        data: data || {},
+                        error: msg
+                    });
                 }
             };
 
-            xhr.onerror = function () { reject(new Error("Сетевая ошибка")); };
-            xhr.onabort = function () { reject(new Error("Отменено")); };
+            xhr.onerror = function () {
+                resolve({ ok: false, status: 0, data: {}, error: "Сетевая ошибка" });
+            };
+            xhr.onabort = function () {
+                resolve({ ok: false, status: 0, data: {}, error: "Отменено" });
+            };
 
             var fd = new FormData();
             Object.keys(fields || {}).forEach(function (k) {
@@ -192,6 +206,7 @@ var FEED_URL = form.dataset.feedUrl;
         };
 
         var createdActivities = [];
+        var skippedActivities = [];
         var errors = [];
 
         // === 1. Загрузка файлов активностей ===
@@ -203,40 +218,59 @@ var FEED_URL = form.dataset.feedUrl;
                     "Загрузка активности " + (idx + 1) + " из " + activityFiles.length,
                     file.name
                 );
+
                 return uploadFile(API_ACTIVITY, file, commonFields, function (loaded, total) {
-                    var pct = total > 0 ? (loaded / total) * 100 : 0;
-                    // Общий прогресс: активность i из N, внутри — процент
                     var overall = ((idx + loaded / Math.max(1, total)) / activityFiles.length) * 60;
-                    setProgress(overall, "Загрузка активности " + (idx + 1) + " из " + activityFiles.length, file.name);
+                    setProgress(
+                        overall,
+                        "Загрузка активности " + (idx + 1) + " из " + activityFiles.length,
+                        file.name
+                    );
                 })
-                .then(function (data) {
-                    createdActivities.push({ file: file.name, data: data });
-                })
-                .catch(function (err) {
-                    errors.push({ file: file.name, message: err.message });
+                .then(function (res) {
+                    if (res.ok) {
+                        createdActivities.push({ file: file.name, data: res.data });
+                        return;
+                    }
+                    if (res.status === 409) {
+                        // Дубликат
+                        skippedActivities.push({
+                            file: file.name,
+                            message: res.error,
+                            duplicateId: res.data && res.data.duplicate_id,
+                            duplicateUrl: res.data && res.data.duplicate_url
+                        });
+                        return;
+                    }
+                    errors.push({ file: file.name, message: res.error });
                 });
             });
         });
 
-        // === 2. Загрузка фото (если есть и есть хотя бы одна активность) ===
+        // === 2. Загрузка фото ===
         activityChain.then(function () {
             if (!photoFiles.length || !createdActivities.length) return;
 
             var targetActivityId = createdActivities[0].data.activity_id;
 
-            // Сначала HEIC-конвертация
             setProgress(60, "Конвертация фото…", "");
             return convertHeic(photoFiles).then(function (converted) {
                 var photoChain = Promise.resolve();
                 converted.forEach(function (file, idx) {
                     photoChain = photoChain.then(function () {
                         var pct = 60 + ((idx + 1) / converted.length) * 40;
-                        setProgress(pct, "Загрузка фото " + (idx + 1) + " из " + converted.length, file.name);
+                        setProgress(
+                            pct,
+                            "Загрузка фото " + (idx + 1) + " из " + converted.length,
+                            file.name
+                        );
                         return uploadFile(API_PHOTO, file, {
                             activity_id: targetActivityId,
                             order: idx
-                        }).catch(function (err) {
-                            errors.push({ file: file.name, message: err.message });
+                        }).then(function (res) {
+                            if (!res.ok) {
+                                errors.push({ file: file.name, message: res.error });
+                            }
                         });
                     });
                 });
@@ -244,11 +278,10 @@ var FEED_URL = form.dataset.feedUrl;
             });
         })
         .then(function () {
-            // === 3. Показываем результат ===
             setProgress(100, "Готово", "");
             setTimeout(function () {
                 setButtonLoading(false);
-                renderResults(createdActivities, errors);
+                renderResults(createdActivities, skippedActivities, errors);
             }, 300);
         })
         .catch(function (err) {
@@ -261,19 +294,25 @@ var FEED_URL = form.dataset.feedUrl;
 
     /* ---------- Рендер результатов ---------- */
 
-    function renderResults(created, errors) {
+    function renderResults(created, skipped, errors) {
         if (!resultsBox) return;
         resultsBox.hidden = false;
 
         var html = "";
-        var total = created.length + errors.length;
+        var total = created.length + skipped.length + errors.length;
         var okCount = created.length;
+        var skipCount = skipped.length;
 
         html += '<div class="upload-results">';
         html += '<h2 class="upload-results__title">Результат загрузки: ';
         html += '<span class="' + (okCount > 0 ? "text-success" : "text-error") + '">';
-        html += okCount + " из " + total + "</span></h2>";
+        html += okCount + " из " + total + "</span>";
+        if (skipCount > 0) {
+            html += ' <span class="muted">(' + skipCount + ' пропущено)</span>';
+        }
+        html += "</h2>";
 
+        // --- Успешно загруженные ---
         created.forEach(function (item) {
             var d = item.data;
             var s = d.summary || {};
@@ -291,10 +330,23 @@ var FEED_URL = form.dataset.feedUrl;
                 html += "<span>" + s.points + " точек</span>";
             }
             html += "</div>";
-html += '<a class="upload-result__link" href="' + escapeHtml(ACTIVITY_URL + d.activity_id) + '">Открыть активность →</a>';
+            html += '<a class="upload-result__link" href="' + escapeHtml(ACTIVITY_URL + d.activity_id) + '">Открыть активность →</a>';
             html += "</div>";
         });
 
+        // --- Пропущенные (дубликаты) ---
+        skipped.forEach(function (item) {
+            html += '<div class="upload-result upload-result--skipped">';
+            html += '<div class="upload-result__head"><span class="upload-result__icon">⏭</span>';
+            html += '<span class="upload-result__name">' + escapeHtml(item.file) + "</span></div>";
+            html += '<div class="upload-result__message">' + escapeHtml(item.message) + "</div>";
+            if (item.duplicateUrl) {
+                html += '<a class="upload-result__link" href="' + escapeHtml(item.duplicateUrl) + '">Открыть существующую →</a>';
+            }
+            html += "</div>";
+        });
+
+        // --- Ошибки ---
         errors.forEach(function (item) {
             html += '<div class="upload-result upload-result--error">';
             html += '<div class="upload-result__head"><span class="upload-result__icon">✕</span>';
@@ -305,7 +357,7 @@ html += '<a class="upload-result__link" href="' + escapeHtml(ACTIVITY_URL + d.ac
 
         html += '<div class="upload-results__actions">';
         if (created.length) {
-html += '<a class="btn btn--primary" href="' + escapeHtml(FEED_URL) + '">Перейти в ленту</a>';
+            html += '<a class="btn btn--primary" href="' + escapeHtml(FEED_URL) + '">Перейти в ленту</a>';
         }
         html += '<a class="btn btn--ghost" href="' + escapeHtml(window.location.pathname) + '">Загрузить ещё</a>';
         html += "</div></div>";
@@ -314,7 +366,7 @@ html += '<a class="btn btn--primary" href="' + escapeHtml(FEED_URL) + '">Пер�
         resultsBox.scrollIntoView({ behavior: "smooth", block: "start" });
     }
 
-    /* ---------- Локальные форматеры (чтобы не тянуть helpers) ---------- */
+    /* ---------- Локальные форматеры ---------- */
 
     function formatDistance(m) {
         m = parseFloat(m) || 0;
@@ -337,7 +389,6 @@ html += '<a class="btn btn--primary" href="' + escapeHtml(FEED_URL) + '">Пер�
 
     form.addEventListener("submit", handleSubmit);
 
-    // Прогресс конвертации HEIC (отдельный индикатор — можно оставить)
     var heicProgress = document.getElementById("heic-progress");
     if (heicProgress && heicConverterAvailable) {
         heicProgress.hidden = true;
