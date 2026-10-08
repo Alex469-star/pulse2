@@ -55,6 +55,7 @@ if ($gearId > 0) {
     }
 }
 
+// ---- Парсинг ----
 try {
     $parsed = match ($ext) {
         'gpx' => GpxParser::parse($file['tmp_name']),
@@ -85,6 +86,38 @@ $finalTitle = $title !== ''
     : $fileBase;
 $finalTitle = mb_substr($finalTitle, 0, 190);
 
+// ---- Отпечаток и хэш ----
+$fingerprint = Activity::fingerprint([
+    'type'         => $type,
+    'started_at'   => $parsed['started_at'],
+    'distance_m'   => $parsed['distance_m'],
+    'duration_sec' => $parsed['duration_sec'],
+]);
+
+$trackJsonEncoded = json_encode($points, JSON_UNESCAPED_UNICODE);
+$trackHash = Activity::trackHash($trackJsonEncoded);
+
+// ---- Проверка на дубликат ----
+$duplicate = Activity::findDuplicate((int)$me['id'], $fingerprint, $trackHash);
+if ($duplicate !== null) {
+    $dup = $duplicate['activity'];
+    $reason = $duplicate['reason'];
+    $when = $dup['started_at']
+        ? date('d.m.Y H:i', strtotime((string)$dup['started_at']))
+        : '—';
+
+    $msg = 'Такая активность уже загружена (#'
+         . (int)$dup['id'] . ' от ' . $when
+         . ($reason === 'track_hash' ? ', трек совпадает' : '')
+         . ')';
+
+    json_err($msg, 409, [
+        'duplicate_id'  => (int)$dup['id'],
+        'duplicate_url' => url('activity.php?id=' . (int)$dup['id']),
+    ]);
+}
+
+// ---- Сохранение ----
 try {
     $activityId = Activity::create((int)$me['id'], [
         'type'             => $type,
@@ -97,8 +130,10 @@ try {
         'avg_speed_mps'    => $parsed['avg_speed_mps'],
         'max_speed_mps'    => $parsed['max_speed_mps'],
         'gear_id'          => $gear,
-        'track_json'       => json_encode($points, JSON_UNESCAPED_UNICODE),
+        'track_json'       => $trackJsonEncoded,
         'visibility'       => $visibility,
+        'fingerprint'      => $fingerprint,
+        'track_hash'       => $trackHash,
         'avg_hr'           => $parsed['avg_hr']      ?? null,
         'max_hr'           => $parsed['max_hr']      ?? null,
         'avg_cadence'      => $parsed['avg_cadence'] ?? null,

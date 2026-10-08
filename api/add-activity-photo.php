@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/_bootstrap.php';
 require_once __DIR__ . '/../models/Activity.php';
+require_once __DIR__ . '/../includes/ImageUploader.php';
 
 api_check_csrf();
 $me = api_require_user();
@@ -29,19 +30,17 @@ if ($existing >= 10) {
 
 $order = (int)($_POST['order'] ?? $existing);
 
-$res = upload_photo([
-    'tmp_name' => $_FILES['file']['tmp_name'],
-    'size'     => (int)$_FILES['file']['size'],
-    'error'    => (int)$_FILES['file']['error'],
-], 'activities', (int)$me['id']);
-
-if (!$res['url']) {
-    json_err($res['error'] ?? 'Не удалось сохранить фото', 400);
+try {
+    // ImageUploader::save() сам разберётся с HEIC/HEIF и сохранит как WebP
+    $relativeUrl = ImageUploader::save($_FILES['file'], 'activities', 1600, 1600, 10 * 1024 * 1024);
+} catch (Throwable $e) {
+    json_err($e->getMessage(), 400);
 }
 
-$photoId = Activity::addPhoto($activityId, $res['url'], $order);
+$fullUrl = url($relativeUrl); // ImageUploader возвращает относительный путь
+$photoId = Activity::addPhoto($activityId, $fullUrl, $order);
 
 json_ok([
     'photo_id' => $photoId,
-    'url'      => $res['url'],
+    'url'      => $fullUrl,
 ]);

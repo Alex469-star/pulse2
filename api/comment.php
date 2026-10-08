@@ -14,6 +14,8 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 $input = json_input();
 $activityId = (int)($input['activity_id'] ?? 0);
 $body       = trim((string)($input['body'] ?? ''));
+$parentId   = isset($input['parent_id']) ? (int)$input['parent_id'] : null;
+if ($parentId !== null && $parentId <= 0) $parentId = null;
 
 if ($activityId <= 0 || $body === '') {
     json_err('activity_id and body required', 400);

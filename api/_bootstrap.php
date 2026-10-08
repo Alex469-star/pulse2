@@ -1,6 +1,10 @@
 <?php
 declare(strict_types=1);
 
+ini_set('display_errors', '0'); // Не показывать в продакшене
+ini_set('log_errors', '1');
+error_reporting(E_ALL);
+
 require_once __DIR__ . '/../includes/helpers.php';
 require_once __DIR__ . '/../config/database.php';
 
@@ -25,10 +29,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 // ---- Утилиты ----
 function json_input(): array
 {
+    static $cached = null;
+    if ($cached !== null) return $cached;
+
     $raw = file_get_contents('php://input');
-    if (!$raw) return $_POST;
+    if (!$raw) {
+        $cached = $_POST;
+        return $cached;
+    }
     $data = json_decode($raw, true);
-    return is_array($data) ? $data : $_POST;
+    $cached = is_array($data) ? $data : $_POST;
+    return $cached;
 }
 
 function json_ok($data, int $code = 200): void
