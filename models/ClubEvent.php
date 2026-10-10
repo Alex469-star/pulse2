@@ -27,37 +27,53 @@ class ClubEvent
     }
 
     public static function listForClub(int $clubId, string $scope = 'upcoming', int $limit = 50): array
-    {
-        $where = ['e.club_id = ?'];
-        $params = [$clubId];
+{
+    $where  = ['e.club_id = ?'];
+    $params = [$clubId];
 
-        switch ($scope) {
-            case 'past':
-                $where[] = 'e.starts_at < NOW()';
-                break;
-            case 'all':
-                // без фильтра
-                break;
-            default: // upcoming
-                $where[] = 'e.starts_at >= NOW() - INTERVAL 1 DAY';
-        }
+    switch ($scope) {
+        case 'past':
+            // Событие в прошлом, если:
+            // - ends_at задан и уже наступил, ИЛИ
+            // - ends_at NULL и starts_at в прошлом
+            $where[] = '(
+                (e.ends_at IS NOT NULL AND e.ends_at < NOW())
+                OR (e.ends_at IS NULL AND e.starts_at < NOW())
+            )';
+            $orderDir = 'DESC';
+            break;
 
-        $whereSql = implode(' AND ', $where);
+        case 'all':
+            $orderDir = 'DESC';
+            break;
 
-        $sql = "SELECT e.*, u.username AS creator_username, u.display_name AS creator_display_name,
-                       (SELECT COUNT(*) FROM club_event_attendees a
-                         WHERE a.event_id = e.id AND a.status = 'going') AS going_count,
-                       (SELECT COUNT(*) FROM club_event_photos p WHERE p.event_id = e.id) AS photos_count
-                  FROM club_events e
-                  JOIN users u ON u.id = e.creator_id
-                 WHERE $whereSql
-              ORDER BY e.starts_at " . ($scope === 'past' ? 'DESC' : 'ASC') . "
-                 LIMIT " . max(1, min(200, $limit));
-
-        $stmt = db()->prepare($sql);
-        $stmt->execute($params);
-        return $stmt->fetchAll();
+        default: // upcoming
+            // Событие предстоящее, если:
+            // - ends_at задан и ещё не наступил (идёт или будет), ИЛИ
+            // - ends_at NULL и starts_at ещё не наступил (или начался в последние 6 часов)
+            $where[] = '(
+                (e.ends_at IS NOT NULL AND e.ends_at >= NOW())
+                OR (e.ends_at IS NULL AND e.starts_at >= NOW() - INTERVAL 6 HOUR)
+            )';
+            $orderDir = 'ASC';
     }
+
+    $whereSql = implode(' AND ', $where);
+
+    $sql = "SELECT e.*, u.username AS creator_username, u.display_name AS creator_display_name,
+                   (SELECT COUNT(*) FROM club_event_attendees a
+                     WHERE a.event_id = e.id AND a.status = 'going') AS going_count,
+                   (SELECT COUNT(*) FROM club_event_photos p WHERE p.event_id = e.id) AS photos_count
+              FROM club_events e
+              JOIN users u ON u.id = e.creator_id
+             WHERE $whereSql
+          ORDER BY e.starts_at $orderDir
+             LIMIT " . max(1, min(200, $limit));
+
+    $stmt = db()->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll();
+}
 
     public static function photos(int $eventId): array
     {

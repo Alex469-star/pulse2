@@ -107,6 +107,48 @@ class Club
     }
 
     // ============================================================
+    // МАППИНГ ТИПОВ АКТИВНОСТЕЙ
+    // ============================================================
+
+    /**
+     * Возвращает список типов активностей, которые показывает клуб
+     * данного вида спорта.
+     *
+     * Пустой массив = показывать все типы (mixed).
+     *
+     * @return string[]
+     */
+    public static function allowedActivityTypes(string $clubSportType): array
+    {
+        return match ($clubSportType) {
+            'mixed' => [],  // пусто = все
+            'run'   => ['run'],
+            'ride'  => ['ride'],
+            'swim'  => ['swim'],
+            'ski'   => ['ski'],
+            'walk'  => ['walk', 'hike'],
+            'hike'  => ['hike', 'walk'],
+            'other' => ['other'],
+            default => [$clubSportType],
+        };
+    }
+
+    /**
+     * Хелпер: строит SQL-фрагмент для фильтра по типу активности.
+     *
+     * @return array{0: string, 1: array}  [SQL-фрагмент, параметры]
+     */
+    private static function buildTypeFilter(string $clubSportType): array
+    {
+        $allowed = self::allowedActivityTypes($clubSportType);
+        if (!$allowed) {
+            return ['', []];
+        }
+        $ph = implode(',', array_fill(0, count($allowed), '?'));
+        return ["AND a.type IN ($ph)", $allowed];
+    }
+
+    // ============================================================
     // СОЗДАНИЕ / РЕДАКТИРОВАНИЕ
     // ============================================================
 
@@ -172,6 +214,11 @@ class Club
         $params[] = $id;
         db()->prepare('UPDATE clubs SET ' . implode(', ', $setSql) . ' WHERE id = ?')
             ->execute($params);
+
+        // Если менялся sport_type — пересчитываем статистику клуба
+        if (array_key_exists('sport_type', $d)) {
+            self::recalcStats($id);
+        }
     }
 
     public static function delete(int $id, int $userId): bool
@@ -269,7 +316,10 @@ class Club
             )->execute([$clubId, $userId, $status]);
         }
 
-        if ($status === 'active') self::recountMembers($clubId);
+        if ($status === 'active') {
+            self::recountMembers($clubId);
+            self::recalcStats($clubId);
+        }
         return $status;
     }
 
@@ -281,6 +331,7 @@ class Club
         db()->prepare('DELETE FROM club_members WHERE club_id = ? AND user_id = ?')
             ->execute([$clubId, $userId]);
         self::recountMembers($clubId);
+        self::recalcStats($clubId);
         return true;
     }
 
@@ -292,6 +343,7 @@ class Club
               WHERE club_id = ? AND user_id = ?'
         )->execute([$approverId, $clubId, $userId]);
         self::recountMembers($clubId);
+        self::recalcStats($clubId);
     }
 
     public static function kick(int $clubId, int $userId): void
@@ -299,6 +351,7 @@ class Club
         db()->prepare('DELETE FROM club_members WHERE club_id = ? AND user_id = ?')
             ->execute([$clubId, $userId]);
         self::recountMembers($clubId);
+        self::recalcStats($clubId);
     }
 
     public static function setRole(int $clubId, int $userId, string $role): void
@@ -356,10 +409,6 @@ class Club
     // СТЕНА
     // ============================================================
 
-    /**
-     * Список корневых постов стены с ответами.
-     * У каждого ответа есть reply_to (кому он адресован).
-     */
     public static function wallTree(int $clubId, int $limit = 30, int $offset = 0): array
     {
         $s = db()->prepare(
@@ -411,9 +460,6 @@ class Club
         return $roots;
     }
 
-    /**
-     * Один пост (для проверки прав и parent).
-     */
     public static function wallPost(int $postId): ?array
     {
         $s = db()->prepare(
@@ -426,15 +472,6 @@ class Club
         return $s->fetch() ?: null;
     }
 
-    /**
-     * Создать пост на стене или ответ.
-     *
-     * @param int      $clubId
-     * @param int      $userId
-     * @param string   $body
-     * @param int|null $parentId       — ID корневого поста, если это ответ
-     * @param int|null $replyToUserId  — ID пользователя, которому адресован ответ
-     */
     public static function addWallPost(
         int $clubId,
         int $userId,
@@ -450,9 +487,6 @@ class Club
         return (int)db()->lastInsertId();
     }
 
-    /**
-     * Редактировать пост.
-     */
     public static function editWallPost(int $postId, int $userId, string $body, bool $isManager = false): bool
     {
         $row = self::wallPost($postId);
@@ -470,9 +504,6 @@ class Club
         return true;
     }
 
-    /**
-     * Удалить (soft) пост.
-     */
     public static function deleteWallPost(int $postId): void
     {
         db()->prepare('UPDATE club_posts SET is_deleted = 1 WHERE id = ?')->execute([$postId]);
@@ -484,33 +515,46 @@ class Club
 
     /**
      * Активности участников клуба с треками для мини-карт.
+     *
+     * Фильтрует по типу активности в соответствии с sport_type клуба.
      */
     public static function activitiesFeed(int $clubId, int $limit = 30, int $offset = 0): array
     {
-        $s = db()->prepare(
-            'SELECT a.id, a.user_id, a.type, a.title, a.description,
-                    a.started_at, a.created_at, a.duration_sec,
-                    a.distance_m, a.elevation_gain_m,
-                    a.avg_speed_mps, a.max_speed_mps,
-                    a.avg_hr, a.max_hr,
-                    a.avg_power_w, a.max_power_w,
-                    a.avg_cadence, a.max_cadence,
-                    a.track_json, a.visibility,
-                    u.username, u.display_name, u.avatar_url,
-                    (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id) AS likes_count,
-                    (SELECT COUNT(*) FROM activity_comments c WHERE c.activity_id = a.id) AS comments_count,
-                    (SELECT COUNT(*) FROM activity_photos p WHERE p.activity_id = a.id) AS photos_count
-               FROM activities a
-               JOIN users u ON u.id = a.user_id
-               JOIN club_members m ON m.user_id = u.id
-              WHERE m.club_id = ? AND m.status = "active"
-                AND a.visibility = "public"
-           ORDER BY COALESCE(a.started_at, a.created_at) DESC
-              LIMIT ? OFFSET ?'
-        );
-        $s->bindValue(1, $clubId, PDO::PARAM_INT);
-        $s->bindValue(2, $limit, PDO::PARAM_INT);
-        $s->bindValue(3, $offset, PDO::PARAM_INT);
+        $club = self::findById($clubId);
+        if (!$club) return [];
+        [$typeFilter, $typeParams] = self::buildTypeFilter((string)($club['sport_type'] ?? 'mixed'));
+
+        $sql = "SELECT a.id, a.user_id, a.type, a.title, a.description,
+                        a.started_at, a.created_at, a.duration_sec,
+                        a.distance_m, a.elevation_gain_m,
+                        a.avg_speed_mps, a.max_speed_mps,
+                        a.avg_hr, a.max_hr,
+                        a.avg_power_w, a.max_power_w,
+                        a.avg_cadence, a.max_cadence,
+                        a.track_json, a.visibility,
+                        u.username, u.display_name, u.avatar_url,
+                        (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id) AS likes_count,
+                        (SELECT COUNT(*) FROM activity_comments c WHERE c.activity_id = a.id) AS comments_count,
+                        (SELECT COUNT(*) FROM activity_photos p WHERE p.activity_id = a.id) AS photos_count
+                   FROM activities a
+                   JOIN users u ON u.id = a.user_id
+                   JOIN club_members m ON m.user_id = u.id
+                  WHERE m.club_id = ?
+                    AND m.status = 'active'
+                    AND a.visibility = 'public'
+                    AND COALESCE(a.started_at, a.created_at) >= m.joined_at
+                    $typeFilter
+               ORDER BY COALESCE(a.started_at, a.created_at) DESC
+                  LIMIT ? OFFSET ?";
+
+        $s = db()->prepare($sql);
+        $i = 1;
+        $s->bindValue($i++, $clubId, PDO::PARAM_INT);
+        foreach ($typeParams as $t) {
+            $s->bindValue($i++, $t, PDO::PARAM_STR);
+        }
+        $s->bindValue($i++, $limit, PDO::PARAM_INT);
+        $s->bindValue($i++, $offset, PDO::PARAM_INT);
         $s->execute();
         $rows = $s->fetchAll();
 
@@ -521,6 +565,35 @@ class Club
         unset($r);
 
         return $rows;
+    }
+
+    /**
+     * Количество публичных активностей участников клуба
+     * с учётом фильтра по типу.
+     */
+    public static function countActivities(int $clubId): int
+    {
+        $club = self::findById($clubId);
+        if (!$club) return 0;
+        [$typeFilter, $typeParams] = self::buildTypeFilter((string)($club['sport_type'] ?? 'mixed'));
+
+        $sql = "SELECT COUNT(*)
+                   FROM activities a
+                   JOIN club_members m ON m.user_id = a.user_id
+                  WHERE m.club_id = ?
+                    AND m.status = 'active'
+                    AND a.visibility = 'public'
+                    AND COALESCE(a.started_at, a.created_at) >= m.joined_at
+                    $typeFilter";
+
+        $s = db()->prepare($sql);
+        $i = 1;
+        $s->bindValue($i++, $clubId, PDO::PARAM_INT);
+        foreach ($typeParams as $t) {
+            $s->bindValue($i++, $t, PDO::PARAM_STR);
+        }
+        $s->execute();
+        return (int)$s->fetchColumn();
     }
 
     private static function simplifyTrack(?string $json, int $maxPoints = 100): array
@@ -551,6 +624,10 @@ class Club
 
     public static function leaderboard(int $clubId, string $period = 'week', int $limit = 20): array
     {
+        $club = self::findById($clubId);
+        if (!$club) return [];
+        [$typeFilter, $typeParams] = self::buildTypeFilter((string)($club['sport_type'] ?? 'mixed'));
+
         $interval = match ($period) {
             'week'  => '7 DAY',
             'month' => '30 DAY',
@@ -558,45 +635,64 @@ class Club
             default => '7 DAY',
         };
 
-        $s = db()->prepare(
-            "SELECT u.id, u.username, u.display_name, u.avatar_url,
-                    COUNT(a.id) AS activities_cnt,
-                    COALESCE(SUM(a.distance_m), 0) AS distance_m,
-                    COALESCE(SUM(a.duration_sec), 0) AS duration_sec
-               FROM club_members m
-               JOIN users u ON u.id = m.user_id
-          LEFT JOIN activities a ON a.user_id = u.id
-                AND a.visibility = 'public'
-                AND COALESCE(a.started_at, a.created_at) >= NOW() - INTERVAL $interval
-              WHERE m.club_id = ? AND m.status = 'active'
-           GROUP BY u.id
-           ORDER BY distance_m DESC
-              LIMIT " . max(1, min(100, $limit))
-        );
-        $s->execute([$clubId]);
+        $sql = "SELECT u.id, u.username, u.display_name, u.avatar_url,
+                       COUNT(a.id) AS activities_cnt,
+                       COALESCE(SUM(a.distance_m), 0) AS distance_m,
+                       COALESCE(SUM(a.duration_sec), 0) AS duration_sec
+                  FROM club_members m
+                  JOIN users u ON u.id = m.user_id
+             LEFT JOIN activities a ON a.user_id = u.id
+                   AND a.visibility = 'public'
+                   AND COALESCE(a.started_at, a.created_at) >= NOW() - INTERVAL $interval
+                   AND COALESCE(a.started_at, a.created_at) >= m.joined_at
+                   $typeFilter
+                 WHERE m.club_id = ? AND m.status = 'active'
+              GROUP BY u.id
+              ORDER BY distance_m DESC
+                 LIMIT " . max(1, min(100, $limit));
+
+        $s = db()->prepare($sql);
+        $i = 1;
+        foreach ($typeParams as $t) {
+            $s->bindValue($i++, $t, PDO::PARAM_STR);
+        }
+        $s->bindValue($i++, $clubId, PDO::PARAM_INT);
+        $s->execute();
         return $s->fetchAll();
     }
 
     /**
-     * Живые агрегаты клуба. Используется, если club_stats пуст.
+     * Живые агрегаты клуба. Учитывает фильтр по типу активности.
      */
     public static function liveStats(int $clubId): array
     {
         try {
-            $s = db()->prepare(
-                "SELECT COUNT(*) AS total_activities,
-                        COALESCE(SUM(a.distance_m), 0) AS total_distance_m,
-                        COALESCE(SUM(a.duration_sec), 0) AS total_duration_sec,
-                        COALESCE(SUM(CASE WHEN COALESCE(a.started_at, a.created_at) >= NOW() - INTERVAL 7 DAY
-                                          THEN a.distance_m ELSE 0 END), 0) AS week_distance_m,
-                        COALESCE(SUM(CASE WHEN COALESCE(a.started_at, a.created_at) >= NOW() - INTERVAL 30 DAY
-                                          THEN a.distance_m ELSE 0 END), 0) AS month_distance_m
-                   FROM activities a
-                   JOIN club_members m ON m.user_id = a.user_id
-                  WHERE m.club_id = ? AND m.status = 'active'
-                    AND a.visibility = 'public'"
-            );
-            $s->execute([$clubId]);
+            $club = self::findById($clubId);
+            if (!$club) return [];
+            [$typeFilter, $typeParams] = self::buildTypeFilter((string)($club['sport_type'] ?? 'mixed'));
+
+            $sql = "SELECT COUNT(*) AS total_activities,
+                            COALESCE(SUM(a.distance_m), 0) AS total_distance_m,
+                            COALESCE(SUM(a.duration_sec), 0) AS total_duration_sec,
+                            COALESCE(SUM(CASE WHEN COALESCE(a.started_at, a.created_at) >= NOW() - INTERVAL 7 DAY
+                                              THEN a.distance_m ELSE 0 END), 0) AS week_distance_m,
+                            COALESCE(SUM(CASE WHEN COALESCE(a.started_at, a.created_at) >= NOW() - INTERVAL 30 DAY
+                                              THEN a.distance_m ELSE 0 END), 0) AS month_distance_m
+                       FROM activities a
+                       JOIN club_members m ON m.user_id = a.user_id
+                      WHERE m.club_id = ?
+                        AND m.status = 'active'
+                        AND a.visibility = 'public'
+                        AND COALESCE(a.started_at, a.created_at) >= m.joined_at
+                        $typeFilter";
+
+            $s = db()->prepare($sql);
+            $i = 1;
+            $s->bindValue($i++, $clubId, PDO::PARAM_INT);
+            foreach ($typeParams as $t) {
+                $s->bindValue($i++, $t, PDO::PARAM_STR);
+            }
+            $s->execute();
             return $s->fetch() ?: [];
         } catch (Throwable $e) {
             return [];
@@ -626,6 +722,29 @@ class Club
             (int)($row['week_distance_m'] ?? 0),
             (int)($row['month_distance_m'] ?? 0),
         ]);
+    }
+
+    /**
+     * Пересчитать статистику всех клубов, в которых состоит пользователь.
+     * Вызывается после создания/обновления/удаления активности.
+     */
+    public static function recalcStatsForUser(int $userId): void
+    {
+        try {
+            $s = db()->prepare(
+                'SELECT club_id FROM club_members 
+                  WHERE user_id = ? AND status = "active"'
+            );
+            $s->execute([$userId]);
+            $clubIds = $s->fetchAll(PDO::FETCH_COLUMN);
+
+            foreach ($clubIds as $clubId) {
+                self::recalcStats((int)$clubId);
+            }
+        } catch (Throwable $e) {
+            // Не валим основной запрос из-за пересчёта
+            error_log('recalcStatsForUser failed: ' . $e->getMessage());
+        }
     }
 
     // ============================================================
@@ -671,7 +790,7 @@ class Club
     // УВЕДОМЛЕНИЯ
     // ============================================================
 
-        public static function notifyNewMember(int $clubId, int $userId): void
+    public static function notifyNewMember(int $clubId, int $userId): void
     {
         if (!class_exists('Notification')) return;
 
@@ -687,13 +806,13 @@ class Club
             (int)$club['owner_id'],
             'club_join',
             $userId,
-            'club:' . $clubId,                    // ← составной тип
+            'club:' . $clubId,
             $clubId,
             $u['display_name'] . ' вступил в клуб «' . $club['name'] . '»'
         );
     }
 
-        public static function notifyWallPost(int $clubId, int $authorId, string $excerpt): void
+    public static function notifyWallPost(int $clubId, int $authorId, string $excerpt): void
     {
         if (!class_exists('Notification')) return;
 
@@ -714,7 +833,6 @@ class Club
         $recipients->execute([$clubId, $authorId]);
         $ids = $recipients->fetchAll(PDO::FETCH_COLUMN);
 
-        // ID последнего вставленного поста (addWallPost вызывается ДО notifyWallPost)
         $postId = (int)db()->lastInsertId();
 
         $text = $authorName . ' написал на стене клуба «' . $club['name'] . '»: '
@@ -722,13 +840,13 @@ class Club
 
         foreach ($ids as $uid) {
             Notification::push(
-    (int)$uid,
-    'club_post',
-    $authorId,
-    'club_post:' . $clubId,
-    (int)db()->lastInsertId(),
-    $text
-);
+                (int)$uid,
+                'club_post',
+                $authorId,
+                'club_post:' . $clubId,
+                $postId,
+                $text
+            );
         }
     }
 
@@ -750,7 +868,7 @@ class Club
             $userId,
             'club_role',
             $byUserId,
-            'club:' . $clubId,                    // ← составной тип
+            'club:' . $clubId,
             $clubId,
             'Ваша роль в клубе «' . $club['name'] . '» изменена на ' . $roleLabel
         );

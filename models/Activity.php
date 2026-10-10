@@ -390,4 +390,166 @@ class Activity
             }
         }
     }
+    
+       // ============================================================
+    // ОБНОВЛЕНИЕ АКТИВНОСТИ (для обрезки трека и др.)
+    // ============================================================
+
+    /**
+     * Обновить поля активности. Проверяет владельца в самом запросе.
+     *
+     * @param int   $id
+     * @param int   $userId
+     * @param array $fields Только разрешённые поля
+     * @return bool true при успехе
+     */
+    public static function update(int $id, int $userId, array $fields): bool
+    {
+        $allowed = [
+            'title', 'description', 'type', 'started_at', 'duration_sec',
+            'distance_m', 'elevation_gain_m', 'avg_speed_mps', 'max_speed_mps',
+            'calories', 'track_json', 'visibility', 'track_hash', 'fingerprint',
+            'avg_hr', 'max_hr', 'avg_cadence', 'max_cadence',
+            'avg_power_w', 'max_power_w', 'avg_temp_c', 'has_sensors',
+            'gear_id', 'source', 'external_id',
+        ];
+
+        $set = [];
+        $params = [':id' => $id, ':uid' => $userId];
+
+        foreach ($fields as $k => $v) {
+            if (!in_array($k, $allowed, true)) continue;
+            $set[] = "`$k` = :$k";
+            $params[":$k"] = $v;
+        }
+
+        if (!$set) return false;
+
+        $sql = 'UPDATE activities SET ' . implode(', ', $set)
+             . ' WHERE id = :id AND user_id = :uid';
+
+        try {
+            $stmt = db()->prepare($sql);
+            return $stmt->execute($params);
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * Пересчитать метрики активности по массиву точек трека.
+     * Возвращает массив для передачи в Activity::update().
+     *
+     * @param array  $points Массив точек [{lat,lng,ele,t,hr,cad,pwr}, ...]
+     * @param string $type   Тип активности (влияет только на логику, в БД не пишется)
+     * @return array
+     */
+    public static function recalcFromTrack(array $points, string $type = 'run'): array
+    {
+        $empty = [
+            'distance_m'       => 0,
+            'duration_sec'     => 0,
+            'elevation_gain_m' => 0,
+            'avg_speed_mps'    => null,
+            'max_speed_mps'    => null,
+            'avg_hr'           => null,
+            'max_hr'           => null,
+            'avg_cadence'      => null,
+            'max_cadence'      => null,
+            'avg_power_w'      => null,
+            'max_power_w'      => null,
+            'has_sensors'      => 0,
+        ];
+
+        $n = count($points);
+        if ($n < 2) return $empty;
+
+        $R = 6371000.0;
+        $haversine = static function (array $a, array $b) use ($R): float {
+            $dLat = deg2rad($b['lat'] - $a['lat']);
+            $dLng = deg2rad($b['lng'] - $a['lng']);
+            $h = sin($dLat / 2) ** 2
+               + cos(deg2rad($a['lat'])) * cos(deg2rad($b['lat'])) * sin($dLng / 2) ** 2;
+            return 2 * $R * asin(min(1.0, sqrt($h)));
+        };
+
+        $distance   = 0.0;
+        $elevGain   = 0.0;
+        $speedSum   = 0.0;
+        $speedCnt   = 0;
+        $speedMax   = 0.0;
+        $hrSum = 0;   $hrCnt = 0;   $hrMax = 0;
+        $cadSum = 0;  $cadCnt = 0;  $cadMax = 0;
+        $pwrSum = 0;  $pwrCnt = 0;  $pwrMax = 0;
+        $hasSensors = 0;
+
+        for ($i = 1; $i < $n; $i++) {
+            $distance += $haversine($points[$i - 1], $points[$i]);
+
+            // Набор высоты
+            if (isset($points[$i]['ele'], $points[$i - 1]['ele'])) {
+                $diff = (float)$points[$i]['ele'] - (float)$points[$i - 1]['ele'];
+                if ($diff > 0) $elevGain += $diff;
+            }
+
+            // Мгновенная скорость
+            $t0 = isset($points[$i - 1]['t']) ? (int)$points[$i - 1]['t'] : 0;
+            $t1 = isset($points[$i]['t'])     ? (int)$points[$i]['t']     : 0;
+            if ($t0 > 0 && $t1 > $t0) {
+                $dt = $t1 - $t0;
+                $v  = $haversine($points[$i - 1], $points[$i]) / $dt;
+                $speedSum += $v;
+                $speedCnt++;
+                if ($v > $speedMax) $speedMax = $v;
+            }
+        }
+
+        // Датчики
+        foreach ($points as $p) {
+            if (isset($p['hr']) && (int)$p['hr'] > 0) {
+                $v = (int)$p['hr'];
+                $hrSum += $v; $hrCnt++;
+                if ($v > $hrMax) $hrMax = $v;
+                $hasSensors = 1;
+            }
+            if (isset($p['cad']) && (int)$p['cad'] > 0) {
+                $v = (int)$p['cad'];
+                $cadSum += $v; $cadCnt++;
+                if ($v > $cadMax) $cadMax = $v;
+                $hasSensors = 1;
+            }
+            if (isset($p['pwr']) && (int)$p['pwr'] > 0) {
+                $v = (int)$p['pwr'];
+                $pwrSum += $v; $pwrCnt++;
+                if ($v > $pwrMax) $pwrMax = $v;
+                $hasSensors = 1;
+            }
+        }
+
+        // Длительность: по t первой и последней точки
+        $duration = 0;
+        $tStart = isset($points[0]['t'])        ? (int)$points[0]['t'] : 0;
+        $tEnd   = isset($points[$n - 1]['t'])   ? (int)$points[$n - 1]['t'] : 0;
+        if ($tStart > 0 && $tEnd > $tStart) {
+            $duration = $tEnd - $tStart;
+        }
+
+        return [
+            'distance_m'       => round($distance, 2),
+            'duration_sec'     => $duration,
+            'elevation_gain_m' => round($elevGain, 2),
+            'avg_speed_mps'    => $speedCnt > 0 ? round($speedSum / $speedCnt, 3) : null,
+            'max_speed_mps'    => $speedMax > 0 ? round($speedMax, 3) : null,
+            'avg_hr'           => $hrCnt > 0 ? (int)round($hrSum / $hrCnt) : null,
+            'max_hr'           => $hrMax > 0 ? $hrMax : null,
+            'avg_cadence'      => $cadCnt > 0 ? (int)round($cadSum / $cadCnt) : null,
+            'max_cadence'      => $cadMax > 0 ? $cadMax : null,
+            'avg_power_w'      => $pwrCnt > 0 ? (int)round($pwrSum / $pwrCnt) : null,
+            'max_power_w'      => $pwrMax > 0 ? $pwrMax : null,
+            'has_sensors'      => $hasSensors,
+        ];
+    }
+   
+   
 }
+
