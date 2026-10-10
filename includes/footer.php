@@ -3,10 +3,12 @@
 <footer class="site-footer">
     <div class="container site-footer__inner">
         <div class="site-footer__brand">
-            <span class="logo__mark">P</span>
-            <span>Pulse</span>
+            <a href="<?= e(url('index.php')) ?>" class="logo">
+             <img src="<?= e(url('assets/img/logo_pulse.png')) ?>" alt="" class="logo__img">
+        </a>
+            <span></span>
         </div>
-        <p class="site-footer__copy">© <?= date('Y') ?> Pulse. Все права защищены.</p>
+        <p class="site-footer__copy">© <?= date('Y') ?> "Пульс". Все права защищены.</p>
         <div class="site-footer__links">
             <a href="<?= e(url('about.php')) ?>">О проекте</a>
             <a href="<?= e(url('privacy.php')) ?>">Приватность</a>
@@ -16,6 +18,8 @@
 </footer>
 
 <script src="<?= e(url('assets/js/main.js')) ?>"></script>
+
+
 <?php foreach (($extraJs ?? []) as $js): ?>
     <script src="<?= e($js) ?>"></script>
 <?php endforeach; ?>
@@ -23,6 +27,10 @@
     <script><?= $inlineJs ?></script>
 <?php endif; ?>
 
+
 <script src="<?= e(url('assets/js/club.js')) ?>" defer></script>
+
+
+
 </body>
 </html>

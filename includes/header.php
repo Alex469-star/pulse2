@@ -34,7 +34,7 @@ if ($me) {
     <?php foreach (($extraJs ?? []) as $js): ?>
         <script src="<?= e($js) ?>"></script>
     <?php endforeach; ?>
-    
+
     <script>window.__CSRF__ = <?= json_encode(csrf_token()) ?>;</script>
 </head>
 <body class="<?= e($bodyClass ?? '') ?>">
@@ -43,15 +43,16 @@ if ($me) {
 <header class="site-header" id="site-header">
     <div class="container site-header__inner">
 
-        <button type="button" class="burger" id="burger" aria-label="Меню" aria-expanded="false">
-            <span class="burger__line"></span>
-            <span class="burger__line"></span>
-            <span class="burger__line"></span>
-        </button>
+        <?php if ($me): ?>
+            <button type="button" class="burger" id="burger" aria-label="Меню" aria-expanded="false">
+                <span class="burger__line"></span>
+                <span class="burger__line"></span>
+                <span class="burger__line"></span>
+            </button>
+        <?php endif; ?>
 
         <a href="<?= e(url('index.php')) ?>" class="logo">
-            <span class="logo__mark">P</span>
-            <span class="logo__text">Pulse</span>
+            <img src="<?= e(url('assets/img/logo_pulse.png')) ?>" alt="Pulse" class="logo__img">
         </a>
 
         <nav class="nav" id="desktop-nav">
@@ -75,19 +76,19 @@ if ($me) {
                 </a>
 
                 <a href="<?= e(url('notifications.php')) ?>"
-   class="icon-btn icon-btn--badge"
-   id="notif-bell"
-   data-notif-api="<?= e(url('api/notifications.php')) ?>"
-   title="Уведомления"
-   aria-label="Уведомления">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
-        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-        <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-    </svg>
-    <span class="badge" id="notif-badge"<?= $unreadCount > 0 ? '' : ' hidden' ?>>
-        <?= $unreadCount > 99 ? '99+' : (int)$unreadCount ?>
-    </span>
-</a>
+                   class="icon-btn icon-btn--badge"
+                   id="notif-bell"
+                   data-notif-api="<?= e(url('api/notifications.php')) ?>"
+                   title="Уведомления"
+                   aria-label="Уведомления">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+                        <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                        <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                    </svg>
+                    <span class="badge" id="notif-badge"<?= $unreadCount > 0 ? '' : ' hidden' ?>>
+                        <?= $unreadCount > 99 ? '99+' : (int)$unreadCount ?>
+                    </span>
+                </a>
 
                 <a href="<?= e(url('activity-upload.php')) ?>"
                    class="btn btn--primary btn--sm site-header__upload"
