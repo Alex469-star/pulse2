@@ -72,6 +72,21 @@
     color: #fff;
     border-color: #0f1420;
 }
+.heatmap-tool:disabled {
+    opacity: .6;
+    cursor: progress;
+}
+
+/* Кнопка "Моё местоположение" — акцентная */
+.heatmap-tool.js-heat-locate {
+    background: linear-gradient(180deg, #fff 0%, #fff7f4 100%);
+    border-color: rgba(233, 79, 46, .3);
+    color: #e94f2e;
+}
+.heatmap-tool.js-heat-locate:hover {
+    background: linear-gradient(180deg, #fff7f4 0%, #ffece4 100%);
+    border-color: rgba(233, 79, 46, .5);
+}
 
 /* Карта */
 .heatmap-map {
@@ -85,7 +100,7 @@
     z-index: 1;
 }
 
-/* Легенда */
+/* Легенда интенсивности */
 .heatmap-legend {
     margin-top: 12px;
     padding: 20px 16px;
@@ -128,6 +143,35 @@
 .heatmap-legend__bar span:first-child { left: 0; }
 .heatmap-legend__bar span:last-child  { right: 0; }
 
+/* Легенда сегментов */
+.heatmap-legend--segments {
+    max-width: none;
+    flex-wrap: wrap;
+}
+
+.heatmap-segments-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+}
+
+.heatmap-segments-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-muted, #5b6473);
+    white-space: nowrap;
+}
+
+.heatmap-segments-legend i {
+    display: inline-block;
+    width: 16px;
+    height: 4px;
+    border-radius: 2px;
+}
+
 /* Мобильные */
 @media (max-width: 640px) {
     .heatmap-page { padding: 0 12px; margin-top: 12px; }
@@ -136,4 +180,6 @@
     .heatmap-toolbar { padding: 10px; gap: 10px; }
     .heatmap-tool { padding: 6px 10px; font-size: 12px; }
     .heatmap-legend { padding: 20px 12px; }
+    .heatmap-segments-legend { gap: 8px; }
+    .heatmap-segments-legend span { font-size: 11px; }
 }

@@ -58,6 +58,38 @@ body {
 .nav__link:hover { color: var(--text); }
 .site-header__actions { display: flex; gap: 10px; }
 
+.logo {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    text-decoration: none;
+    gap: 2px;
+    line-height: 1;
+}
+
+
+.logo__caption {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--text, #1a1a1c);
+    /* Небольшой отступ сверху, чтобы надпись не липла к картинке */
+    margin-top: 2px;
+}
+
+.logo__img {
+    display: block;
+    height: 45px;
+    width: auto;
+}
+
+@media (max-width: 640px) {
+    .logo__img {
+        height: 50px;
+    }
+}
+
 /* HERO */
 .hero { display: grid; grid-template-columns: 1.1fr 1fr; gap: 60px; align-items: center; max-width: var(--container); margin: 0 auto; padding: 90px 24px 100px; }
 .hero__badge { display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 999px; border: 1px solid var(--border); background: #fff; font-size: 13px; color: var(--text-muted); margin-bottom: 22px; box-shadow: var(--shadow-sm); }
@@ -113,7 +145,7 @@ body {
 .cta__text { color: var(--text-muted); margin-bottom: 28px; font-size: 17px; }
 
 /* FOOTER */
-.site-footer { border-top: 1px solid var(--border); background: var(--bg-soft); }
+.site-footer { border-top: 1px solid var(--border); background: #ffffff; }
 .site-footer__inner { display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 28px 24px; flex-wrap: wrap; }
 .site-footer__brand { display: flex; align-items: center; gap: 10px; font-weight: 700; }
 .site-footer__copy { color: var(--text-soft); font-size: 14px; }
@@ -129,7 +161,7 @@ body {
 
 /* FORMS */
 .form-page { max-width: 520px; margin: 60px auto 100px; padding: 0 24px; }
-.form-card { padding: 32px; border-radius: var(--radius-lg); background: #fff; border: 1px solid var(--border); box-shadow: var(--shadow); }
+.form-card { padding: 17px; border-radius: var(--radius-lg); background: #fff; border: 1px solid var(--border); box-shadow: var(--shadow); }
 .form-card__title { font-size: 26px; font-weight: 800; margin-bottom: 6px; }
 .form-card__subtitle { color: var(--text-muted); font-size: 14px; margin-bottom: 24px; }
 .form-card__subtitle a { color: var(--accent); font-weight: 600; }
@@ -137,7 +169,7 @@ body {
 .field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
 .field label { font-size: 14px; font-weight: 600; color: var(--text); }
 .field input, .field select, .field textarea {
-    padding: 11px 14px; border-radius: 12px; border: 1px solid var(--border-strong);
+    padding: 11px 5px; border-radius: 12px; border: 1px solid var(--border-strong);
     font-family: inherit; font-size: 15px; background: #fff; transition: .2s;
 }
 .field input:focus, .field select:focus, .field textarea:focus {
@@ -6830,159 +6862,289 @@ form button[type="submit"][disabled] {
 #upload-results { margin-bottom: 20px; }
 
 
-/* ============ HERO FULL-WIDTH С ФОНОВОЙ КАРТИНКОЙ ============ */
+/* ============================================================
+   HERO — базовая структура
+   ============================================================ */
+
 .hero-full {
     position: relative;
-    width: 100%;
-    min-height: 640px;
+    min-height: 100vh;
     display: flex;
     align-items: center;
-    padding: 80px 24px 100px;
+    justify-content: center;
+    padding: 40px 24px;
     overflow: hidden;
-
-    /* Картинка растягивается на всю ширину окна */
-    background-image: url('/pulse/assets/img/hero-bg.jpg');
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
+    background: linear-gradient(135deg, #0f1420 0%, #1a2030 100%);
+    color: #fff;
 }
 
-/* Вуаль, чтобы текст и форма читались поверх любой картинки */
 .hero-full__overlay {
     position: absolute;
     inset: 0;
-    z-index: 0;
-    background: linear-gradient(
-        90deg,
-        rgba(255,255,255,.92) 0%,
-        rgba(255,255,255,.82) 45%,
-        rgba(255,255,255,.55) 100%
-    );
+    background: radial-gradient(circle at 30% 40%, rgba(233, 79, 46, .18), transparent 60%);
     pointer-events: none;
 }
 
-/* Контент центрируется внутри секции, но сама секция — от края до края */
 .hero-full__inner {
     position: relative;
     z-index: 1;
     display: grid;
-    grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
-    gap: 56px;
-    align-items: center;
+    grid-template-columns: 1fr 1fr;
+    gap: 48px;
+    max-width: 1200px;
     width: 100%;
-    max-width: var(--container);
-    margin: 0 auto;
+    align-items: center;
 }
 
-.hero-full__text { min-width: 0; }
+/* Текст */
+.hero-full__text {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
 
 .hero-full__title {
-    font-size: clamp(32px, 4.6vw, 56px);
-    line-height: 1.05;
+    font-size: 48px;
     font-weight: 800;
+    line-height: 1.05;
     letter-spacing: -.03em;
-    margin: 18px 0 20px;
+    margin: 0;
+    color: #fff;
 }
+
 .hero-full__title .accent {
-    background: linear-gradient(135deg, var(--accent), var(--accent-2));
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
+    color: #e94f2e;
 }
 
 .hero-full__subtitle {
     font-size: 17px;
-    color: var(--text-muted);
-    max-width: 560px;
-    margin-bottom: 8px;
+    line-height: 1.5;
+    color: rgba(255, 255, 255, .75);
+    margin: 0;
+    max-width: 520px;
 }
 
 .hero-full__list {
+    list-style: none;
+    padding: 0;
+    margin: 8px 0 0;
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    margin-top: 24px;
-    font-size: 15px;
-    color: var(--text);
-}
-.hero-full__list li {
-    display: flex;
-    gap: 10px;
-    align-items: flex-start;
-    line-height: 1.5;
+    gap: 12px;
 }
 
-/* Правая колонка — форма */
+.hero-full__list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-size: 15px;
+    line-height: 1.45;
+    color: rgba(255, 255, 255, .85);
+}
+
+.hero-full__list-icon {
+    flex: 0 0 auto;
+    font-size: 20px;
+    line-height: 1.4;
+}
+
+.hero-full__list strong {
+    color: #fff;
+    font-weight: 600;
+}
+
+/* Счётчики */
+.hero-full__stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-top: 12px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(255, 255, 255, .1);
+}
+
+.hero-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.hero-stat__value {
+    font-size: 24px;
+    font-weight: 800;
+    color: #e94f2e;
+    letter-spacing: -.02em;
+}
+
+.hero-stat__label {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: rgba(255, 255, 255, .5);
+}
+
+/* Форма */
 .hero-full__form {
-    min-width: 0;
     display: flex;
     justify-content: flex-end;
 }
 
-.hero-full__form .login-card {
+.login-card {
     width: 100%;
-    max-width: 420px;
-    padding: 28px;
-    background: rgba(255,255,255,.96);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-lg);
+    max-width: 400px;
+    background: #fff;
+    color: #1a1a1c;
+    border-radius: 20px;
+    padding: 32px 28px;
+    box-shadow: 0 24px 60px -20px rgba(0, 0, 0, .5);
 }
 
 .login-card__title {
-    font-size: 22px;
-    font-weight: 800;
+    font-size: 24px;
+    font-weight: 700;
     margin: 0 0 6px;
-    letter-spacing: -.01em;
+    color: #1a1a1c;
 }
 
 .login-card__subtitle {
     font-size: 14px;
-    color: var(--text-muted);
-    margin-bottom: 18px;
+    color: #8a8a8f;
+    margin: 0 0 20px;
 }
-.login-card__subtitle a { color: var(--accent); font-weight: 600; }
 
-.hero-full__form .login-card .field { margin-bottom: 14px; }
-.hero-full__form .login-card .btn { margin-top: 6px; }
+.login-card__subtitle a {
+    color: #e94f2e;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.login-card__subtitle a:hover {
+    text-decoration: underline;
+}
 
 .login-card__footer {
-    margin-top: 14px;
+    margin-top: 16px;
     text-align: center;
     font-size: 13px;
 }
-.login-card__footer a { color: var(--text-muted); }
-.login-card__footer a:hover { color: var(--accent); }
 
-/* ============ АДАПТИВ ============ */
-@media (max-width: 900px) {
-    .hero-full {
-        padding: 48px 20px 64px;
-        min-height: 0;
-        background-position: center top;
-    }
-    .hero-full__overlay {
-        background: linear-gradient(
-            180deg,
-            rgba(255,255,255,.90) 0%,
-            rgba(255,255,255,.80) 50%,
-            rgba(255,255,255,.92) 100%
-        );
-    }
+.login-card__footer a {
+    color: #8a8a8f;
+    text-decoration: none;
+}
+
+.login-card__footer a:hover {
+    color: #e94f2e;
+}
+
+/* Бейдж */
+.hero__badge {
+    display: inline-block;
+    align-self: flex-start;
+    padding: 6px 14px;
+    background: rgba(233, 79, 46, .15);
+    border: 1px solid rgba(233, 79, 46, .35);
+    border-radius: 999px;
+    color: #e94f2e;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    text-transform: uppercase;
+}
+
+/* ============================================================
+   ПЛАНШЕТЫ
+   ============================================================ */
+
+@media (max-width: 960px) {
     .hero-full__inner {
         grid-template-columns: 1fr;
         gap: 32px;
+        max-width: 560px;
     }
-    .hero-full__form { justify-content: stretch; }
-    .hero-full__form .login-card { max-width: 100%; }
+
+    .hero-full__title {
+        font-size: 36px;
+    }
+
+    .hero-full__form {
+        justify-content: center;
+        order: -1; /* форма ВЫШЕ текста на планшете и мобильном */
+    }
+
+    .hero-full__stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
 }
 
-@media (max-width: 560px) {
-    .hero-full { padding: 32px 16px 48px; }
-    .hero-full__form .login-card { padding: 22px; }
-    .hero-full__list { font-size: 14px; }
+/* ============================================================
+   МОБИЛЬНЫЕ
+   ============================================================ */
+
+@media (max-width: 640px) {
+    .hero-full {
+        padding: 24px 16px 32px;
+        min-height: auto;
+        align-items: flex-start;
+    }
+
+    .hero-full__inner {
+        gap: 24px;
+    }
+
+    /* Форма — самая первая */
+    .hero-full__form {
+        order: -1;
+    }
+
+    .login-card {
+        padding: 24px 20px;
+        border-radius: 16px;
+    }
+
+    .login-card__title {
+        font-size: 20px;
+    }
+
+    .hero-full__title {
+        font-size: 28px;
+        line-height: 1.15;
+    }
+
+    .hero-full__subtitle {
+        font-size: 15px;
+    }
+
+    .hero-full__list li {
+        font-size: 14px;
+    }
+
+    /* На мобильном — прячем длинный список, оставляем только 3 пункта */
+    .hero-full__list li:nth-child(n+4) {
+        display: none;
+    }
+
+    .hero-full__stats {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+    }
+
+    .hero-stat__value {
+        font-size: 20px;
+    }
+
+    .hero-stat__label {
+        font-size: 10px;
+    }
+}
+
+@media (max-width: 380px) {
+    .hero-full__title {
+        font-size: 24px;
+    }
+    .hero-full__list li:nth-child(n+3) {
+        display: none; /* оставляем только 2 пункта */
+    }
 }
 
 /* ============ CAL GOAL ============ */
@@ -10035,9 +10197,9 @@ form button[type="submit"][disabled] {
 .sidebar-user2__avatar {
     display: grid;
     place-items: center;
-    width: 72px;
-    height: 72px;
-    border-radius: 25%;
+    width: 85px;
+    height: 85px;
+    border-radius: 50%;
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
     color: #fff;
     font-weight: 800;
@@ -10298,4 +10460,607 @@ form button[type="submit"][disabled] {
 }
 .upload-result--skipped .upload-result__icon {
     background: #a36a00;
+}
+
+.club-events__subtabs {
+    margin-bottom: 12px;
+}
+
+/* ============================================================
+   Событие клуба в ленте
+   ============================================================ */
+
+.event-card {
+    background: var(--bg-card, #fff);
+    border: 1px solid var(--border, #e8e8ec);
+    border-radius: 16px;
+    overflow: hidden;
+    margin-bottom: 16px;
+    transition: border-color .15s, box-shadow .15s;
+}
+
+.event-card:hover {
+    border-color: var(--border-strong, #d8d8de);
+    box-shadow: 0 4px 12px -6px rgba(0,0,0,.08);
+}
+
+.event-card__cover {
+    height: 160px;
+    background-size: cover;
+    background-position: center;
+    background-color: #f5f5f7;
+}
+
+.event-card__body {
+    padding: 16px;
+}
+
+.event-card__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+}
+
+.event-card__type {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent, #e94f2e);
+    text-decoration: none;
+}
+
+.event-card__club {
+    font-size: 12px;
+    color: var(--text-muted, #8a8a8f);
+    text-decoration: none;
+}
+
+.event-card__club:hover {
+    color: var(--accent, #e94f2e);
+}
+
+.event-card__title-link {
+    text-decoration: none;
+    color: inherit;
+}
+
+.event-card__title {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--text, #1a1a1c);
+    margin: 0 0 8px;
+    line-height: 1.3;
+}
+
+.event-card__description {
+    font-size: 14px;
+    color: var(--text-muted, #8a8a8f);
+    line-height: 1.45;
+    margin-bottom: 10px;
+}
+
+.event-card__meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-muted, #8a8a8f);
+    margin-bottom: 12px;
+}
+
+/* ============================================================
+   Кнопка «Ещё N комментариев»
+   ============================================================ */
+
+.comments-more {
+    display: inline-block;
+    padding: 6px 10px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--accent, #e94f2e);
+    text-decoration: none;
+    border-radius: 8px;
+    transition: background .15s;
+    margin-top: 4px;
+}
+
+.comments-more:hover {
+    background: rgba(233, 79, 46, .08);
+}
+
+/* Компактный комментарий в ленте */
+.comment--compact {
+    padding: 8px 0;
+}
+
+/* ============================================================
+   HERO — ЛЕНДИНГ С ФОНОМ
+   ============================================================ */
+
+/* Запрет скролла на десктопе. На мобильном — отключим ниже. */
+html:has(.hero-full),
+body:has(.hero-full) {
+    height: 100%;
+    overflow: hidden;
+}
+
+/* ---------- Базовый блок ---------- */
+.hero-full {
+    position: relative;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    color: #fff;
+    background: #0f1420;
+}
+
+/* ---------- Фон ---------- */
+.hero-full__bg {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-color: #0f1420;
+    z-index: 0;
+    animation: heroBgZoom 24s ease-out infinite alternate;
+}
+
+@keyframes heroBgZoom {
+    from { transform: scale(1); }
+    to   { transform: scale(1.06); }
+}
+
+/* ---------- Затемнение ---------- */
+.hero-full__overlay {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        180deg,
+        rgba(15, 20, 32, .55) 0%,
+        rgba(15, 20, 32, .82) 100%
+    );
+    z-index: 1;
+    pointer-events: none;
+}
+
+/* ---------- Сетка контента ---------- */
+.hero-full__inner {
+    position: relative;
+    z-index: 2;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 48px;
+    align-items: center;
+    width: 100%;
+    max-width: 1200px;
+    padding: 0 24px;
+    max-height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,.2) transparent;
+}
+
+.hero-full__inner::-webkit-scrollbar { width: 6px; }
+.hero-full__inner::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,.15);
+    border-radius: 3px;
+}
+
+/* ---------- Текст ---------- */
+.hero-full__text {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+}
+
+.hero__badge {
+    display: inline-block;
+    align-self: flex-start;
+    padding: 6px 14px;
+    background: rgba(233, 79, 46, .15);
+    border: 1px solid rgba(233, 79, 46, .35);
+    border-radius: 999px;
+    color: #e94f2e;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+}
+
+.hero-full__title {
+    font-size: 46px;
+    font-weight: 800;
+    line-height: 1.05;
+    letter-spacing: -.03em;
+    margin: 0;
+    color: #fff;
+}
+
+.hero-full__title .accent {
+    color: #e94f2e;
+}
+
+.hero-full__subtitle {
+    font-size: 16px;
+    line-height: 1.5;
+    color: rgba(255, 255, 255, .75);
+    margin: 0;
+    max-width: 520px;
+}
+
+.hero-full__list {
+    list-style: none;
+    padding: 0;
+    margin: 8px 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.hero-full__list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-size: 14.5px;
+    line-height: 1.4;
+    color: rgba(255, 255, 255, .85);
+}
+
+.hero-full__list-icon {
+    flex: 0 0 auto;
+    font-size: 18px;
+    line-height: 1.4;
+}
+
+.hero-full__list strong {
+    color: #fff;
+    font-weight: 600;
+}
+
+/* ---------- Счётчики ---------- */
+.hero-full__stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-top: 10px;
+    padding-top: 18px;
+    border-top: 1px solid rgba(255, 255, 255, .1);
+}
+
+.hero-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.hero-stat__value {
+    font-size: 22px;
+    font-weight: 800;
+    color: #e94f2e;
+    letter-spacing: -.02em;
+}
+
+.hero-stat__label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    color: rgba(255, 255, 255, .5);
+}
+
+/* ---------- Форма входа ---------- */
+.hero-full__form {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.login-card {
+    width: 100%;
+    max-width: 400px;
+    background: #fff;
+    color: #1a1a1c;
+    border-radius: 20px;
+    padding: 32px 28px;
+    box-shadow: 0 24px 60px -20px rgba(0, 0, 0, .55);
+}
+
+.login-card__title {
+    font-size: 24px;
+    font-weight: 700;
+    margin: 0 0 6px;
+    color: #1a1a1c;
+}
+
+.login-card__subtitle {
+    font-size: 14px;
+    color: #8a8a8f;
+    margin: 0 0 20px;
+}
+
+.login-card__subtitle a {
+    color: #e94f2e;
+    text-decoration: none;
+    font-weight: 600;
+}
+
+.login-card__subtitle a:hover {
+    text-decoration: underline;
+}
+
+.login-card__footer {
+    margin-top: 16px;
+    text-align: center;
+    font-size: 13px;
+}
+
+.login-card__footer a {
+    color: #8a8a8f;
+    text-decoration: none;
+}
+
+.login-card__footer a:hover {
+    color: #e94f2e;
+}
+
+/* ============================================================
+   ПЛАНШЕТ: одна колонка, форма выше текста
+   ============================================================ */
+
+@media (max-width: 960px) {
+    .hero-full__inner {
+        grid-template-columns: 1fr;
+        gap: 28px;
+        max-width: 560px;
+        padding: 24px;
+    }
+
+    .hero-full__title {
+        font-size: 34px;
+    }
+
+    .hero-full__form {
+        justify-content: center;
+        order: -1;
+    }
+
+    .hero-full__stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* ============================================================
+   МОБИЛЬНЫЕ: разрешаем скролл, фон фиксируем
+   ============================================================ */
+
+@media (max-width: 640px) {
+
+    /* Отключаем запрет скролла на мобильном */
+    html:has(.hero-full),
+    body:has(.hero-full) {
+        height: auto;
+        overflow: visible;
+        overflow-x: hidden;
+    }
+
+    /* Hero — на всю высоту, но растёт вместе с контентом */
+    .hero-full {
+        height: auto;
+        min-height: 100dvh;
+        padding: 0 0 32px;
+        align-items: flex-start;
+        overflow: visible;
+    }
+
+    /* Фон и затемнение — фиксируем, чтобы не «уезжали» при скролле */
+    .hero-full__bg {
+        position: fixed;
+        inset: 0;
+        height: 100dvh;
+        will-change: transform;
+        transform: translateZ(0);
+    }
+
+    .hero-full__overlay {
+        position: fixed;
+        inset: 0;
+        height: 100dvh;
+    }
+
+    /* Сетка — одна колонка, без внутреннего скролла */
+    .hero-full__inner {
+        grid-template-columns: 1fr;
+        gap: 20px;
+        padding: 16px;
+        max-width: 100%;
+        max-height: none;
+        overflow: visible;
+    }
+
+    /* Форма — первая */
+    .hero-full__form {
+        order: -1;
+        width: 100%;
+    }
+
+    .login-card {
+        padding: 22px 18px;
+        border-radius: 16px;
+        box-shadow: 0 16px 40px -16px rgba(0, 0, 0, .55);
+    }
+
+    .login-card__title {
+        font-size: 20px;
+    }
+
+    /* Текст */
+    .hero-full__title {
+        font-size: 26px;
+        line-height: 1.15;
+    }
+
+    /* Убираем жёсткие <br> на мобильном — текст течёт по ширине */
+    .hero-full__title br {
+        display: none;
+    }
+
+    .hero-full__subtitle {
+        font-size: 14.5px;
+    }
+
+    .hero-full__list li {
+        font-size: 13.5px;
+    }
+
+    /* Все пункты списка видны — раз скролл разрешён */
+    .hero-full__list li:nth-child(n+4) {
+        display: flex;
+    }
+
+    /* Статистика — 2 колонки, все 4 счётчика влезают */
+    .hero-full__stats {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+    }
+
+    .hero-stat__value {
+        font-size: 18px;
+    }
+
+    .hero-stat__label {
+        font-size: 10px;
+    }
+
+    /* Скрываем скроллбар на всякий случай */
+    .hero-full__inner::-webkit-scrollbar { display: none; }
+    .hero-full__inner { scrollbar-width: none; }
+
+/* ============================================================
+   ОЧЕНЬ УЗКИЕ ЭКРАНЫ
+   ============================================================ */
+
+@media (max-width: 380px) {
+    .hero-full__title {
+        font-size: 22px;
+    }
+    .hero-stat__value {
+        font-size: 16px;
+    }
+}
+
+/* ============================================================
+   ГЛОБАЛЬНЫЙ ПРОГРЕСС-БАР (полоса сверху)
+   ============================================================ */
+
+.page-progress {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    z-index: 99999;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity .2s ease;
+}
+
+.page-progress.is-active {
+    opacity: 1;
+}
+
+.page-progress__bar {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg,
+        #ff5a1f 0%,
+        #ffb020 50%,
+        #ff5a1f 100%);
+    border-radius: 0 2px 2px 0;
+    box-shadow:
+        0 0 8px rgba(255, 90, 31, .55),
+        0 0 2px rgba(255, 90, 31, .9);
+    transition: width .3s ease;
+}
+
+/* Анимация «застрявшего» прогресса — медленно ползёт до 90% */
+@keyframes progressStuck {
+    0%   { width: 0; }
+    15%  { width: 25%; }
+    40%  { width: 55%; }
+    70%  { width: 75%; }
+    100% { width: 90%; }
+}
+
+/* ============================================================
+   ГЛОБАЛЬНЫЙ ОВЕРЛЕЙ (для долгих операций)
+   ============================================================ */
+
+.page-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 99998;
+    background: rgba(15, 20, 32, .55);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    opacity: 0;
+    transition: opacity .25s ease;
+}
+
+.page-overlay[hidden] { display: none; }
+
+.page-overlay.is-visible {
+    opacity: 1;
+}
+
+.page-overlay__spinner {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.page-overlay__dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    opacity: .35;
+    animation: pageOverlayPulse 1.2s infinite ease-in-out;
+}
+.page-overlay__dot:nth-child(2) { animation-delay: .15s; }
+.page-overlay__dot:nth-child(3) { animation-delay: .3s; }
+
+@keyframes pageOverlayPulse {
+    0%, 80%, 100% { transform: scale(.8); opacity: .35; }
+    40%           { transform: scale(1.3); opacity: 1; }
+}
+
+.page-overlay__text {
+    color: #fff;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: .02em;
+    text-shadow: 0 2px 8px rgba(0, 0, 0, .4);
+}
+
+/* Отключаем при prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+    .page-progress__bar,
+    .page-overlay,
+    .page-overlay__dot {
+        animation: none !important;
+        transition: none !important;
+    }
 }
