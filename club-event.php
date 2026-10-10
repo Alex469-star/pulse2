@@ -197,7 +197,7 @@ require __DIR__ . '/includes/header.php';
                 <div class="club-event__actions">
                     <a class="btn btn--ghost btn--sm"
                        href="<?= e(url('club-event-edit.php?id=' . $eventId)) ?>">✏️ Редактировать</a>
-                    <form method="post" action="<?= e(url('api/club-event-delete.php')) ?>"
+                    <form method="post" action="<?= e(url('club-event-delete.php')) ?>"
                           onsubmit="return confirm('Удалить событие? Это необратимо.')">
                         <?= csrf_field() ?>
                         <input type="hidden" name="event_id" value="<?= $eventId ?>">

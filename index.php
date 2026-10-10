@@ -30,32 +30,100 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'quick
     }
 }
 
+// ============================================================
+// СТАТИСТИКА ДЛЯ HERO (с кэшем)
+// ============================================================
+$stats = [
+    'users'       => 0,
+    'activities'  => 0,
+    'distance_km' => 0,
+    'clubs'       => 0,
+];
+
+try {
+    $stats = Cache::remember('landing.stats', function () {
+        return [
+            'users'       => (int)db()->query('SELECT COUNT(*) FROM users WHERE is_banned = 0')->fetchColumn(),
+            'activities'  => (int)db()->query('SELECT COUNT(*) FROM activities')->fetchColumn(),
+            'distance_km' => (int)round((float)db()->query('SELECT COALESCE(SUM(distance_m),0) FROM activities')->fetchColumn() / 1000),
+            'clubs'       => (int)db()->query('SELECT COUNT(*) FROM clubs WHERE is_banned = 0')->fetchColumn(),
+        ];
+    }, 600); // 10 минут
+} catch (Throwable $e) {
+    // Игнорируем — покажем блок без цифр
+}
+
+$hasStats = $stats['users'] >= 10;
+
 $pageTitle = 'Pulse — социальная платформа для спортсменов';
 require __DIR__ . '/includes/header.php';
 ?>
 
 <!-- ============ HERO НА ВСЮ ШИРИНУ ЭКРАНА ============ -->
 <section class="hero-full">
+    <div class="hero-full__bg"
+         style="background-image: url('<?= e(url('assets/img/hero-bg.jpg')) ?>');"></div>
     <div class="hero-full__overlay"></div>
 
     <div class="hero-full__inner">
         <!-- ЛЕВАЯ КОЛОНКА: текст -->
         <div class="hero-full__text">
             <span class="hero__badge">Новое поколение спортивных сообществ</span>
+
             <h1 class="hero-full__title">
                 Твои тренировки.<br>Твои маршруты.<br>
                 <span class="accent">Твоё сообщество.</span>
             </h1>
+
             <p class="hero-full__subtitle">
-                Загружай GPX, TCX и FIT, рисуй маршруты, соревнуйся на сегментах
-                и делись результатами с теми, кто тебя понимает.
+                Pulse — платформа для бегунов, велосипедистов, лыжников и всех,
+                кто любит движение. Загружай тренировки, соревнуйся на сегментах,
+                вступай в клубы и находи своих.
             </p>
+
             <ul class="hero-full__list">
-                <li>📂 Импорт активностей из любых часов и приложений</li>
-                <li>🗺️ Карта, профиль высот, пульс, каденс и мощность</li>
-                <li>⚡ Сегменты и честные лидерборды</li>
-                <li>👥 Подписки, лайки, комментарии</li>
+                <li>
+                    <span class="hero-full__list-icon">📂</span>
+                    <span><strong>Импорт активностей</strong> — GPX, TCX, FIT или вручную</span>
+                </li>
+                <li>
+                    <span class="hero-full__list-icon">🗺️</span>
+                    <span><strong>Карта и аналитика</strong> — профиль высот, пульс, каденс, мощность</span>
+                </li>
+                <li>
+                    <span class="hero-full__list-icon">⚡</span>
+                    <span><strong>Сегменты и лидерборды</strong> — соревнуйся с другими на любимых участках</span>
+                </li>
+                <li>
+                    <span class="hero-full__list-icon">🏁</span>
+                    <span><strong>Клубы и события</strong> — находи единомышленников по городу и виду спорта</span>
+                </li>
+                <li>
+                    <span class="hero-full__list-icon">👟</span>
+                    <span><strong>Инвентарь</strong> — учёт пробега кроссовок, велосипеда и лыж</span>
+                </li>
             </ul>
+
+            <?php if ($hasStats): ?>
+                <div class="hero-full__stats">
+                    <div class="hero-stat">
+                        <span class="hero-stat__value"><?= number_format($stats['users'], 0, '.', ' ') ?></span>
+                        <span class="hero-stat__label">атлетов</span>
+                    </div>
+                    <div class="hero-stat">
+                        <span class="hero-stat__value"><?= number_format($stats['activities'], 0, '.', ' ') ?></span>
+                        <span class="hero-stat__label">тренировок</span>
+                    </div>
+                    <div class="hero-stat">
+                        <span class="hero-stat__value"><?= number_format($stats['distance_km'], 0, '.', ' ') ?></span>
+                        <span class="hero-stat__label">км пройдено</span>
+                    </div>
+                    <div class="hero-stat">
+                        <span class="hero-stat__value"><?= number_format($stats['clubs'], 0, '.', ' ') ?></span>
+                        <span class="hero-stat__label">клубов</span>
+                    </div>
+                </div>
+            <?php endif; ?>
         </div>
 
         <!-- ПРАВАЯ КОЛОНКА: форма входа -->

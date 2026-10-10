@@ -35,6 +35,28 @@ if ($editId > 0) {
 // POST
 // ============================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+
+    // ---------- ОТЛАДКА (временно) ----------
+    // Пишем в storage/gear-debug.log всё, что приходит в POST.
+    // Уберём, когда разберёмся с проблемой.
+    try {
+        $logDir = __DIR__ . '/storage';
+        if (!is_dir($logDir)) @mkdir($logDir, 0775, true);
+        file_put_contents(
+            $logDir . '/gear-debug.log',
+            date('c') . ' ' . json_encode([
+                'action'   => $_POST['action'] ?? null,
+                'gear_id'  => $_POST['gear_id'] ?? null,
+                'has_csrf' => isset($_POST['csrf']),
+                'csrf_len' => isset($_POST['csrf']) ? strlen((string)$_POST['csrf']) : 0,
+                'uri'      => $_SERVER['REQUEST_URI'] ?? '',
+            ], JSON_UNESCAPED_UNICODE) . "\n",
+            FILE_APPEND
+        );
+    } catch (Throwable $e) {
+        // молча
+    }
+
     csrf_check($_POST['csrf'] ?? null);
     $action = $_POST['action'] ?? '';
 
@@ -103,14 +125,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $allowedTypes = ['bike', 'shoes', 'skis', 'other'];
         if (!in_array($type, $allowedTypes, true)) $type = 'other';
 
-        // Новое фото (если загружено)
         $photoUrl = $item['photo_url'];
         if (!empty($_FILES['photo']['tmp_name']) && is_uploaded_file($_FILES['photo']['tmp_name'])) {
             $up = gear_handle_upload($_FILES['photo'], $uploadsDir, $uploadsUrl, (int)$me['id']);
             if ($up['error']) {
                 $errors['photo'] = $up['error'];
             } else {
-                // Удаляем старое фото
                 if (!empty($item['photo_url'])) {
                     gear_delete_file($item['photo_url'], $uploadsDir, $uploadsUrl);
                 }
@@ -118,7 +138,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        // Удаление фото (если стоит галочка)
         if (!empty($_POST['remove_photo']) && !$errors) {
             if (!empty($item['photo_url'])) {
                 gear_delete_file($item['photo_url'], $uploadsDir, $uploadsUrl);
@@ -138,7 +157,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'photo_url'     => $photoUrl,
                 ];
 
-                // Отдельная логика для retired, потому что он может быть переключателем
                 if (isset($_POST['is_retired'])) {
                     $fields['is_retired'] = $_POST['is_retired'] ? 1 : 0;
                 }
@@ -151,7 +169,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
-        // При ошибке остаёмся в режиме редактирования
         $editItem = $item;
         $editId = $gearId;
     }
@@ -208,6 +225,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         redirect(url('gear.php'));
     }
 
+    // ---------- Пересчитать пробег ----------
+    if ($action === 'recalc_distance') {
+        $gearId = (int)($_POST['gear_id'] ?? 0);
+        if ($gearId > 0) {
+            try {
+                $total = Gear::recalcDistance($gearId, (int)$me['id']);
+                $item = Gear::findById($gearId);
+                $label = $item ? $item['name'] : ('#' . $gearId);
+                flash('Пробег «' . $label . '»: ' . format_distance($total), 'success');
+            } catch (Throwable $e) {
+                flash('Ошибка пересчёта: ' . $e->getMessage(), 'error');
+            }
+        }
+        redirect(url('gear.php'));
+    }
+
     // ---------- Удалить ----------
     if ($action === 'delete') {
         $gearId = (int)($_POST['gear_id'] ?? 0);
@@ -243,7 +276,7 @@ try {
 
 $pageTitle = $editItem ? 'Редактировать инвентарь' : 'Инвентарь';
 
-// Подключаем heic2any — конвертация HEIC в JPEG на клиенте
+// heic2any — конвертация HEIC на клиенте
 $extraJs = array_merge($extraJs ?? [], [
     'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js',
 ]);
@@ -406,7 +439,6 @@ function gear_age(?string $date): ?string
                 <input type="hidden" name="action" value="update">
                 <input type="hidden" name="gear_id" value="<?= (int)$editItem['id'] ?>">
 
-                <!-- Текущее фото -->
                 <?php if (!empty($editItem['photo_url'])): ?>
                     <div class="gear-edit-photo">
                         <img src="<?= e($editItem['photo_url']) ?>" alt="">
@@ -457,6 +489,7 @@ function gear_age(?string $date): ?string
                         <input type="date" id="purchase_date" name="purchase_date"
                                max="<?= date('Y-m-d') ?>"
                                value="<?= e($editItem['purchase_date'] ?? '') ?>">
+                        <span class="field__hint">Пробег считается только с этой даты</span>
                     </div>
                     <div class="field field--checkbox" style="align-self:end">
                         <label>
@@ -487,7 +520,6 @@ function gear_age(?string $date): ?string
                 </div>
             </form>
 
-            <!-- Опасная зона -->
             <div class="danger-zone">
                 <h3 class="danger-zone__title">Опасная зона</h3>
                 <p class="muted">Удаление необратимо. Привязанные активности потеряют привязку к этому инвентарю.</p>
@@ -570,6 +602,7 @@ function gear_age(?string $date): ?string
                 <div class="field">
                     <label for="purchase_date">Дата покупки</label>
                     <input type="date" id="purchase_date" name="purchase_date" max="<?= date('Y-m-d') ?>">
+                    <span class="field__hint">Пробег считается только с этой даты</span>
                 </div>
 
                 <div class="field">
@@ -578,19 +611,19 @@ function gear_age(?string $date): ?string
                 </div>
 
                 <div class="field">
-    <label for="photo">Фото</label>
-    <input type="file" id="photo" name="photo" accept="image/*,.heic,.heif">
-    <?php if (!empty($errors['photo'])): ?>
-        <span class="field__error"><?= e($errors['photo']) ?></span>
-    <?php endif; ?>
-    <span class="field__hint">JPG, PNG, WEBP, HEIC · до 5 МБ</span>
-</div>
+                    <label for="photo">Фото</label>
+                    <input type="file" id="photo" name="photo" accept="image/*,.heic,.heif">
+                    <?php if (!empty($errors['photo'])): ?>
+                        <span class="field__error"><?= e($errors['photo']) ?></span>
+                    <?php endif; ?>
+                    <span class="field__hint">JPG, PNG, WEBP, HEIC · до 5 МБ</span>
+                </div>
 
-<!-- Прогресс конвертации HEIC -->
-<div id="heic-progress" class="heic-progress" hidden>
-    <span class="heic-progress__spinner"></span>
-    <span class="heic-progress__text">Конвертирую HEIC-фото…</span>
-</div>
+                <div id="heic-progress" class="heic-progress" hidden>
+                    <span class="heic-progress__spinner"></span>
+                    <span class="heic-progress__text">Конвертирую HEIC-фото…</span>
+                </div>
+
                 <div class="form-actions">
                     <button type="submit" class="btn btn--primary">Добавить</button>
                     <button type="button" class="btn btn--ghost" id="cancel-form">Отмена</button>
@@ -616,6 +649,7 @@ function gear_age(?string $date): ?string
                         $wearClass = $wear >= 90 ? 'is-danger' : ($wear >= 70 ? 'is-warning' : '');
                         $age = gear_age($g['purchase_date'] ?? null);
                         $isRetired = (int)$g['is_retired'] === 1;
+                        $hasPurchaseDate = !empty($g['purchase_date']);
                     ?>
                     <article class="gear-card <?= $isRetired ? 'gear-card--retired' : '' ?>">
                         <div class="gear-card__photo">
@@ -658,7 +692,9 @@ function gear_age(?string $date): ?string
                             <div class="gear-card__metrics">
                                 <div class="gear-metric">
                                     <span class="gear-metric__value"><?= e(format_distance((float)($g['distance_m'] ?? 0))) ?></span>
-                                    <span class="gear-metric__label">пробег</span>
+                                    <span class="gear-metric__label">
+                                        пробег<?= $hasPurchaseDate ? ' с ' . e(date('d.m.Y', strtotime((string)$g['purchase_date']))) : '' ?>
+                                    </span>
                                 </div>
                                 <div class="gear-metric">
                                     <span class="gear-metric__value"><?= (int)($g['activities_count'] ?? 0) ?></span>
@@ -672,7 +708,7 @@ function gear_age(?string $date): ?string
                                 <?php endif; ?>
                             </div>
 
-                            <div class="gear-wear">
+                            <!-- <div class="gear-wear">
                                 <div class="gear-wear__head">
                                     <span class="muted">Износ</span>
                                     <span class="gear-wear__percent <?= $wearClass ?>"><?= $wear ?>%</span>
@@ -680,7 +716,7 @@ function gear_age(?string $date): ?string
                                 <div class="gear-wear__bar">
                                     <div class="gear-wear__fill <?= $wearClass ?>" style="width: <?= $wear ?>%"></div>
                                 </div>
-                            </div>
+                            </div> -->
 
                             <?php if (!empty($g['notes'])): ?>
                                 <div class="gear-card__notes"><?= nl2br(e($g['notes'])) ?></div>
@@ -690,6 +726,15 @@ function gear_age(?string $date): ?string
                                 <a href="<?= e(url('gear.php?edit=' . (int)$g['id'])) ?>" class="action">
                                     ✏️ Редактировать
                                 </a>
+
+                                <form method="post" style="display:inline">
+                                    <?= csrf_field() ?>
+                                    <input type="hidden" name="action" value="recalc_distance">
+                                    <input type="hidden" name="gear_id" value="<?= (int)$g['id'] ?>">
+                                    <button class="action" title="Пересчитать пробег с даты покупки">
+                                        🔄 Пересчитать
+                                    </button>
+                                </form>
 
                                 <form method="post" style="display:inline">
                                     <?= csrf_field() ?>
@@ -760,12 +805,10 @@ window.addEventListener('load', function () {
         console.warn("heic2any не загрузился — HEIC не будет конвертироваться");
     }
 
-    // ---- Прогресс-плашка ----
     var progress = document.getElementById("heic-progress");
     function showProgress() { if (progress) progress.hidden = false; }
     function hideProgress() { if (progress) progress.hidden = true; }
 
-    // ---- Конвертация одного файла ----
     function convertFile(file) {
         var name = (file.name || "").toLowerCase();
         var isHeic = name.endsWith(".heic") || name.endsWith(".heif");
@@ -780,15 +823,13 @@ window.addEventListener('load', function () {
             })
             .catch(function (err) {
                 console.error("HEIC convert error:", err);
-                return file; // оставляем оригинал, сервер вернёт ошибку
+                return file;
             });
     }
 
-    // ---- Перехват обычных форм с submit ----
     document.querySelectorAll("form").forEach(function (form) {
         var input = form.querySelector('input[type="file"][name="photo"]');
         if (!input) return;
-        // Пропускаем overlay, у него своя логика ниже
         if (input.hasAttribute("onchange")) return;
 
         form.addEventListener("submit", function (e) {
@@ -821,9 +862,7 @@ window.addEventListener('load', function () {
         });
     });
 
-    // ---- Обработка overlay-инпутов с onchange ----
     document.querySelectorAll('input[type="file"][name="photo"][onchange]').forEach(function (input) {
-        // Убираем inline-обработчик, чтобы он не отправлял форму до конвертации
         input.removeAttribute("onchange");
 
         input.addEventListener("change", function () {

@@ -2,17 +2,20 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/heatmap-cities.php';
 
 auth_start();
 $me = current_user();
 
 $pageTitle = 'Тепловая карта';
 
-// ============================================================
-// ПОДКЛЮЧЕНИЕ РЕСУРСОВ
-// header.php подключит CSS и JS в порядке массива.
-// ВАЖЕН ПОРЯДОК: сначала Leaflet, потом плагин, потом наш скрипт.
-// ============================================================
+// ---- Координаты города пользователя для автоцентрирования ----
+$userCoords = null;
+if ($me && !empty($me['city'])) {
+    $userCoords = heatmap_city_coords((string)$me['city']);
+}
+
+// ---- Подключение ресурсов ----
 $extraCss = [
     'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
     url('assets/css/heatmap.css'),
@@ -60,6 +63,19 @@ require __DIR__ . '/includes/header.php';
             <button type="button" class="heatmap-tool js-heat-type" data-type="ski">⛷️ Лыжи</button>
         </div>
 
+        <div class="heatmap-toolbar__group">
+            <span class="heatmap-toolbar__label">Сегменты:</span>
+            <button type="button" class="heatmap-tool js-segments-toggle is-active" data-on="1">
+                Показать
+            </button>
+        </div>
+
+        <div class="heatmap-toolbar__group">
+            <button type="button" class="heatmap-tool js-heat-locate" title="Найти меня">
+                📍 Моё местоположение
+            </button>
+        </div>
+
     </div>
 
     <div id="heatmap-map" class="heatmap-map"></div>
@@ -72,13 +88,27 @@ require __DIR__ . '/includes/header.php';
         </div>
     </div>
 
+    <div class="heatmap-legend heatmap-legend--segments">
+        <span class="heatmap-legend__label">Сегменты:</span>
+        <div class="heatmap-segments-legend">
+            <span><i style="background:#e94f2e"></i> Бег</span>
+            <span><i style="background:#2e7de9"></i> Вело</span>
+            <span><i style="background:#68b96b"></i> Ходьба</span>
+            <span><i style="background:#8a6a3a"></i> Хайкинг</span>
+            <span><i style="background:#5e9ee9"></i> Лыжи</span>
+            <span><i style="background:#2ec4e9"></i> Плавание</span>
+        </div>
+    </div>
+
 </section>
 
 <script>
-window.__HEATMAP_API__  = <?= json_encode(url('api/heatmap.php')) ?>;
-window.__HEATMAP_MODE__ = 'global';
-window.__HEATMAP_ME__   = <?= (int)($me['id'] ?? 0) ?>;
-window.__HEATMAP_TYPE__ = '';
+window.__HEATMAP_API__       = <?= json_encode(url('api/heatmap.php')) ?>;
+window.__HEATMAP_SEG_API__   = <?= json_encode(url('api/heatmap-segments.php')) ?>;
+window.__HEATMAP_MODE__      = 'global';
+window.__HEATMAP_ME__        = <?= (int)($me['id'] ?? 0) ?>;
+window.__HEATMAP_TYPE__      = '';
+window.__HEATMAP_USER_COORDS__ = <?= json_encode($userCoords, JSON_UNESCAPED_UNICODE) ?>;
 </script>
 
 <?php require __DIR__ . '/includes/footer.php'; ?>

@@ -331,9 +331,6 @@ if ($segments) {
 // ХЕЛПЕР: СКОЛЬЗЯЩАЯ МЕДИАНА ДЛЯ ГРАФИКА СКОРОСТИ
 // ============================================================
 if (!function_exists('smoothSpeed')) {
-    /**
-     * Скользящая медиана по значению 'v' в массиве точек.
-     */
     function smoothSpeed(array $data, int $window = 5): array
     {
         $n = count($data);
@@ -353,10 +350,7 @@ if (!function_exists('smoothSpeed')) {
             sort($vals);
             $median = $vals[intdiv(count($vals), 2)];
 
-            $out[] = [
-                'd' => $data[$i]['d'],
-                'v' => $median,
-            ];
+            $out[] = ['d' => $data[$i]['d'], 'v' => $median];
         }
 
         return $out;
@@ -382,12 +376,11 @@ $sensorAgg = [
 $hasSpeedSource    = false;
 $hasDistanceSource = false;
 
-// Итоги, которые покажем в блоке цифр
-$calcDistanceM       = (float)($activity['distance_m'] ?? 0); // финальная дистанция
-$calcDurationSec     = (int)($activity['duration_sec'] ?? 0); // общее время
-$calcAvgSpeedMps     = null;  // средняя по движению
-$calcAvgWithStopsMps = null;  // средняя с остановками
-$calcStopTimeSec     = 0;     // время остановок
+$calcDistanceM       = (float)($activity['distance_m'] ?? 0);
+$calcDurationSec     = (int)($activity['duration_sec'] ?? 0);
+$calcAvgSpeedMps     = null;
+$calcAvgWithStopsMps = null;
+$calcStopTimeSec     = 0;
 
 if (!empty($activity['track_json'])) {
     $decoded = json_decode((string)$activity['track_json'], true);
@@ -405,8 +398,8 @@ if (!empty($activity['track_json'])) {
                 'cad'      => isset($p['cad'])      ? (int)$p['cad']        : null,
                 'pwr'      => isset($p['pwr'])      ? (int)$p['pwr']        : null,
                 'temp'     => isset($p['temp'])     ? (float)$p['temp']     : null,
-                'speed'    => isset($p['speed'])    ? (float)$p['speed']    : null, // м/с
-                'distance' => isset($p['distance']) ? (float)$p['distance'] : null, // м
+                'speed'    => isset($p['speed'])    ? (float)$p['speed']    : null,
+                'distance' => isset($p['distance']) ? (float)$p['distance'] : null,
             ];
         }
 
@@ -430,27 +423,20 @@ if (!empty($activity['track_json'])) {
         $pwrSum = 0; $pwrCnt = 0;
         $cadSum = 0; $cadCnt = 0;
 
-        // Данные датчика скорости/дистанции
         foreach ($points as $p) {
             if ($p['distance'] !== null && $p['distance'] >= 0) { $hasDistanceSource = true; }
             if ($p['speed'] !== null && $p['speed'] >= 0)       { $hasSpeedSource = true; }
         }
 
         // ---- Расчёт остановок ----
-        // Считаем точку «остановкой», если мгновенная скорость < 1 км/ч (0.28 м/с).
-        // Паузы короче 3 секунд игнорируем (это не остановка, а замедление).
-        // Если между двумя точками разрыв во времени > 5 минут — считаем это концом активности,
-        // а не остановкой (защита от многодневных пауз).
         $movingTimeSec = 0;
         $stopTimeSec   = 0;
         $pauseStart    = null;
         $prevT         = null;
-        $prevSpeedMps  = null;
 
         foreach ($points as $i => $p) {
             if ($p['t'] === null) continue;
 
-            // Мгновенная скорость точки
             $v = null;
             if ($hasSpeedSource && $p['speed'] !== null && $p['speed'] >= 0) {
                 $v = $p['speed'];
@@ -462,19 +448,15 @@ if (!empty($activity['track_json'])) {
             if ($prevT !== null && $p['t'] > $prevT) {
                 $dt = $p['t'] - $prevT;
 
-                // Разрыв > 5 минут — игнорируем как остановку
                 if ($dt > 300) {
                     $dt = 0;
                 }
 
                 if ($v !== null && $v < 0.28) {
-                    // Это остановка
                     if ($pauseStart === null) $pauseStart = $prevT;
                     $stopTimeSec += $dt;
                 } else {
-                    // Движение
                     if ($pauseStart !== null) {
-                        // Была пауза — если она меньше 3 секунд, считаем движением
                         $pauseLen = $prevT - $pauseStart;
                         if ($pauseLen < 3) {
                             $stopTimeSec -= $pauseLen;
@@ -488,11 +470,6 @@ if (!empty($activity['track_json'])) {
 
             $prevT = $p['t'];
             $prev  = $p;
-        }
-
-        // Если активность закончилась на паузе — она не считается остановкой
-        if ($pauseStart !== null) {
-            $stopTimeSec = max(0, $stopTimeSec - 0);
         }
 
         // ---- Итоговая дистанция ----
@@ -527,7 +504,6 @@ if (!empty($activity['track_json'])) {
         $prev = null;
 
         foreach ($points as $i => $p) {
-            // Накопленная дистанция
             if ($hasDistanceSource && $p['distance'] !== null && $p['distance'] >= 0) {
                 $dist = max($dist, $p['distance']);
             } elseif ($prev !== null) {
@@ -538,7 +514,6 @@ if (!empty($activity['track_json'])) {
                 $elevData[] = ['d' => round($dist, 1), 'ele' => round($p['ele'], 1)];
             }
 
-            // Скорость
             if ($hasSpeedSource && $p['speed'] !== null && $p['speed'] >= 0) {
                 $speedKmh = $p['speed'] * 3.6;
                 if ($speedKmh < 120) {
@@ -618,8 +593,14 @@ $hasSensors = !empty($activity['has_sensors'])
 
 $pageTitle = $activity['title'];
 
+// ============================================================
+// РЕСУРСЫ
+// activity-trim.js НЕ подключаем здесь — он должен идти
+// после HTML-разметки модалки, в самом низу страницы.
+// ============================================================
 $extraCss = [
     'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
+    url('assets/css/activity-trim.css'),
 ];
 
 $extraJs = [
@@ -1155,6 +1136,14 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
                         <span class="activity-sidebar__icon">✏️</span>
                         <span class="activity-sidebar__label">Редактировать</span>
                     </a>
+
+                    <?php if ($track): ?>
+                        <button type="button" class="activity-sidebar__link js-trim-open">
+                            <span class="activity-sidebar__icon">✂️</span>
+                            <span class="activity-sidebar__label">Обрезать трек</span>
+                        </button>
+                    <?php endif; ?>
+
                     <form method="post" class="activity-sidebar__form">
                         <?= csrf_field() ?>
                         <input type="hidden" name="action" value="toggle_visibility">
@@ -1623,6 +1612,92 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
     </main>
 </div>
 
+<!-- ============================================================
+     МОДАЛКА ОБРЕЗКИ ТРЕКА (только владельцу, если есть трек)
+     Важно: сначала передаём данные в JS, потом разметка, потом скрипт.
+     ============================================================ -->
+<?php if ($isOwner && $track): ?>
+<script>
+window.__ACTIVITY_TRIM__ = {
+    activityId: <?= (int)$activityId ?>,
+    apiUrl: <?= json_encode(url('api/activity-trim.php')) ?>,
+    csrf: <?= json_encode(csrf_token()) ?>,
+};
+window.__ACTIVITY_TRACK__ = <?= json_encode($track, JSON_UNESCAPED_UNICODE) ?>;
+</script>
+
+<div class="trim-modal" id="trim-modal" hidden>
+    <div class="trim-modal__backdrop" data-trim-close></div>
+    <div class="trim-modal__panel">
+
+        <div class="trim-modal__head">
+            <h2 class="trim-modal__title">✂️ Обрезать трек</h2>
+            <button type="button" class="trim-modal__close" data-trim-close aria-label="Закрыть">×</button>
+        </div>
+
+        <div class="trim-modal__map">
+            <div id="trim-map"></div>
+        </div>
+
+        <div class="trim-modal__chart">
+            <canvas id="trim-chart"></canvas>
+        </div>
+
+        <div class="trim-modal__controls">
+            <div class="trim-slider">
+                <div class="trim-slider__track">
+                    <div class="trim-slider__fill" id="trim-fill"></div>
+                </div>
+                <input type="range" id="trim-start" class="trim-slider__input trim-slider__input--start"
+                       min="0" max="<?= count($track) - 1 ?>" value="0" step="1">
+                <input type="range" id="trim-end" class="trim-slider__input trim-slider__input--end"
+                       min="0" max="<?= count($track) - 1 ?>" value="<?= count($track) - 1 ?>" step="1">
+            </div>
+
+            <div class="trim-info">
+                <div class="trim-info__col">
+                    <div class="trim-info__label">Начало</div>
+                    <div class="trim-info__value" id="trim-start-label">точка 1</div>
+                </div>
+                <div class="trim-info__col">
+                    <div class="trim-info__label">Конец</div>
+                    <div class="trim-info__value" id="trim-end-label">точка <?= count($track) ?></div>
+                </div>
+            </div>
+
+            <div class="trim-stats">
+                <div class="trim-stat">
+                    <div class="trim-stat__value" id="trim-dist">—</div>
+                    <div class="trim-stat__label">Дистанция</div>
+                </div>
+                <div class="trim-stat">
+                    <div class="trim-stat__value" id="trim-time">—</div>
+                    <div class="trim-stat__label">Время</div>
+                </div>
+                <div class="trim-stat">
+                    <div class="trim-stat__value" id="trim-speed">—</div>
+                    <div class="trim-stat__label">Средняя</div>
+                </div>
+                <div class="trim-stat">
+                    <div class="trim-stat__value" id="trim-elev">—</div>
+                    <div class="trim-stat__label">Набор</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="trim-modal__footer">
+            <button type="button" class="btn btn--ghost" data-trim-close>Отмена</button>
+            <button type="button" class="btn btn--primary" id="trim-save">💾 Сохранить</button>
+        </div>
+    </div>
+</div>
+
+<script src="<?= e(url('assets/js/activity-trim.js')) ?>"></script>
+<?php endif; ?>
+
+<!-- ============================================================
+     ЛАЙТБОКС ФОТО
+     ============================================================ -->
 <?php if ($activityPhotos): ?>
 <script>
 (function () {
@@ -1697,9 +1772,7 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
     });
 
     lb.addEventListener('click', function (e) {
-        if (e.target === lb) {
-            close();
-        }
+        if (e.target === lb) close();
     });
 
     document.addEventListener('keydown', function (e) {

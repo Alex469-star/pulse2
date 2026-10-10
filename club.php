@@ -117,16 +117,40 @@ $tab = (string)($_GET['tab'] ?? 'wall');
 $allowedTabs = ['wall', 'activities', 'events', 'members'];
 if (!in_array($tab, $allowedTabs, true)) $tab = 'wall';
 
+// Подскоуп для таба событий
+$eventScope = (string)($_GET['event_scope'] ?? 'upcoming');
+if (!in_array($eventScope, ['upcoming', 'past'], true)) {
+    $eventScope = 'upcoming';
+}
+
+// Пагинация активностей
+$actPage    = max(1, (int)($_GET['act_page'] ?? 1));
+$actPerPage = 15;
+
 $wall = [];
 if ($tab === 'wall') {
     try { $wall = Club::wallTree($clubId, 30, 0); }
     catch (Throwable $e) { $wall = []; }
 }
 
-$activities = [];
+$activities      = [];
+$activitiesTotal = 0;
+$activitiesPages = 1;
 if ($tab === 'activities') {
-    try { $activities = Club::activitiesFeed($clubId, 30); }
-    catch (Throwable $e) { $activities = []; }
+    try {
+        $activitiesTotal = Club::countActivities($clubId);
+        $activitiesPages = max(1, (int)ceil($activitiesTotal / $actPerPage));
+
+        // Если страница за пределами — прижимаем к последней
+        if ($actPage > $activitiesPages) {
+            $actPage = $activitiesPages;
+        }
+
+        $offset = ($actPage - 1) * $actPerPage;
+        $activities = Club::activitiesFeed($clubId, $actPerPage, $offset);
+    } catch (Throwable $e) {
+        $activities = [];
+    }
 }
 
 $upcomingEvents = [];
@@ -134,9 +158,15 @@ $pastEvents     = [];
 $nextEvent      = null;
 if ($hasClubEvent) {
     try {
+        // upcoming нужен всегда — для блока "Ближайшее событие" вне таба
+        // и для счётчика в табе
         $upcomingEvents = ClubEvent::listForClub($clubId, 'upcoming', 12);
-        $pastEvents     = ClubEvent::listForClub($clubId, 'past', 12);
         $nextEvent      = $upcomingEvents[0] ?? null;
+
+        // past тянем только если открыт таб events и выбран past
+        if ($tab === 'events' && $eventScope === 'past') {
+            $pastEvents = ClubEvent::listForClub($clubId, 'past', 12);
+        }
     } catch (Throwable $e) {}
 }
 
@@ -212,8 +242,6 @@ if (!function_exists('club_activity_label')) {
 
 /**
  * Рендер поста или ответа.
- * У ответов: "→ Кому" в шапке, кнопка Ответить адресует автору ответа.
- * У корневых: сюда же складываются ответы (.js-replies).
  */
 if (!function_exists('club_render_wall_post')) {
     function club_render_wall_post(array $p, int $clubId, ?array $me, bool $canManage, int $depth = 0): void
@@ -435,6 +463,169 @@ if (!function_exists('club_render_activities')) {
     }
 }
 
+/**
+ * Пагинация для таба "Активности".
+ * Использует data-act-page для AJAX-загрузки.
+ */
+if (!function_exists('club_render_activities_pagination')) {
+    function club_render_activities_pagination(
+        int $clubId,
+        int $currentPage,
+        int $totalPages,
+        int $totalItems
+    ): void {
+        if ($totalPages <= 1) return;
+
+        $buildUrl = function (int $page) use ($clubId): string {
+            return '?id=' . $clubId . '&tab=activities&act_page=' . $page;
+        };
+
+        // Окно страниц вокруг текущей
+        $window = 2;
+        $from = max(1, $currentPage - $window);
+        $to   = min($totalPages, $currentPage + $window);
+        ?>
+        <nav class="pagination club-activities__pagination" aria-label="Пагинация активностей">
+            <?php if ($currentPage > 1): ?>
+                <a class="pagination__item pagination__item--arrow"
+                   href="<?= e($buildUrl($currentPage - 1)) ?>"
+                   data-act-page="<?= $currentPage - 1 ?>"
+                   rel="prev">← Назад</a>
+            <?php endif; ?>
+
+            <?php if ($from > 1): ?>
+                <a class="pagination__item"
+                   href="<?= e($buildUrl(1)) ?>"
+                   data-act-page="1">1</a>
+                <?php if ($from > 2): ?>
+                    <span class="pagination__dots">…</span>
+                <?php endif; ?>
+            <?php endif; ?>
+
+            <?php for ($p = $from; $p <= $to; $p++): ?>
+                <?php if ($p === $currentPage): ?>
+                    <span class="pagination__item is-active"><?= $p ?></span>
+                <?php else: ?>
+                    <a class="pagination__item"
+                       href="<?= e($buildUrl($p)) ?>"
+                       data-act-page="<?= $p ?>"><?= $p ?></a>
+                <?php endif; ?>
+            <?php endfor; ?>
+
+            <?php if ($to < $totalPages): ?>
+                <?php if ($to < $totalPages - 1): ?>
+                    <span class="pagination__dots">…</span>
+                <?php endif; ?>
+                <a class="pagination__item"
+                   href="<?= e($buildUrl($totalPages)) ?>"
+                   data-act-page="<?= $totalPages ?>"><?= $totalPages ?></a>
+            <?php endif; ?>
+
+            <?php if ($currentPage < $totalPages): ?>
+                <a class="pagination__item pagination__item--arrow"
+                   href="<?= e($buildUrl($currentPage + 1)) ?>"
+                   data-act-page="<?= $currentPage + 1 ?>"
+                   rel="next">Вперёд →</a>
+            <?php endif; ?>
+        </nav>
+        <?php
+    }
+}
+
+/**
+ * Общий блок таба "События" — с подтабами и RSVP.
+ */
+if (!function_exists('club_render_events_tab')) {
+    function club_render_events_tab(
+        int $clubId,
+        string $eventScope,
+        array $upcomingEvents,
+        array $pastEvents,
+        bool $isMember,
+        bool $canManage,
+        ?array $me
+    ): void {
+        ?>
+        <?php if ($canManage): ?>
+            <div class="club-card-block club-card-block--actions">
+                <div class="club-card-block__title-row">
+                    <h2 class="club-card-block__title">События клуба</h2>
+                    <a class="btn btn--primary btn--sm"
+                       href="<?= e(url('club-event-create.php?club_id=' . $clubId)) ?>">+ Создать событие</a>
+                </div>
+            </div>
+        <?php endif; ?>
+
+        <div class="feed-tabs club-events__subtabs" id="club-events-subtabs">
+            <a class="feed-tab <?= $eventScope === 'upcoming' ? 'is-active' : '' ?>"
+               href="?id=<?= $clubId ?>&tab=events&event_scope=upcoming"
+               data-event-scope="upcoming">Предстоящие</a>
+            <a class="feed-tab <?= $eventScope === 'past' ? 'is-active' : '' ?>"
+               href="?id=<?= $clubId ?>&tab=events&event_scope=past"
+               data-event-scope="past">Прошедшие</a>
+        </div>
+
+        <div class="club-card-block">
+            <?php $eventList = $eventScope === 'past' ? $pastEvents : $upcomingEvents; ?>
+            <h2 class="club-card-block__title">
+                <?= $eventScope === 'past' ? 'Прошедшие' : 'Предстоящие' ?>
+                <span class="club-view__count"><?= count($eventList) ?></span>
+            </h2>
+
+            <?php if (!$eventList): ?>
+                <p class="muted">
+                    <?= $eventScope === 'past' ? 'Прошедших событий нет.' : 'Предстоящих событий нет.' ?>
+                </p>
+            <?php else: ?>
+                <?php foreach ($eventList as $e): ?>
+                    <?php
+                        $starts = strtotime((string)$e['starts_at']);
+                        $myStatus = ($me && $eventScope === 'upcoming' && class_exists('ClubEvent'))
+                            ? ClubEvent::myStatus((int)$e['id'], (int)$me['id'])
+                            : null;
+                    ?>
+                    <div class="club-events-list__item">
+                        <div class="club-events-list__date">
+                            <div class="club-events-list__day"><?= e(date('d', $starts)) ?></div>
+                            <div class="club-events-list__mon"><?= e(club_event_month_ru((int)date('n', $starts))) ?></div>
+                        </div>
+                        <div class="club-events-list__body">
+                            <a class="club-events-list__title"
+                               href="<?= e(url('club-event.php?id=' . (int)$e['id'])) ?>">
+                                <?= e(club_event_type_icon((string)$e['type'])) ?>
+                                <?= e($e['title']) ?>
+                            </a>
+                            <div class="club-events-list__meta muted">
+                                ⏰ <?= e(date('d.m.Y H:i', $starts)) ?>
+                                · 👥 <?= (int)($e['going_count'] ?? 0) ?>
+                                <?php if (($e['status'] ?? '') === 'cancelled'): ?>
+                                    · <span style="color:#b3261e">Отменено</span>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                        <div class="club-events-list__actions">
+                            <?php if ($myStatus === 'going'): ?>
+                                <span class="admin-badge admin-badge--ok">Иду</span>
+                            <?php elseif ($isMember && $eventScope === 'upcoming'): ?>
+                                <form method="post" style="display:inline">
+                                    <?= csrf_field() ?>
+                                    <input type="hidden" name="action" value="event_rsvp">
+                                    <input type="hidden" name="event_id" value="<?= (int)$e['id'] ?>">
+                                    <button name="status" value="going"
+                                            class="btn btn--ghost btn--sm">✅ Иду</button>
+                                </form>
+                            <?php endif; ?>
+                            <a class="btn btn--ghost btn--sm"
+                               href="<?= e(url('club-event.php?id=' . (int)$e['id'])) ?>">→</a>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            <?php endif; ?>
+        </div>
+        <?php
+    }
+}
+
 $pageTitle = $club['name'];
 
 // ============================================================
@@ -467,47 +658,10 @@ if ($isAjax) {
 
         <?php elseif ($tab === 'activities'): ?>
             <?php club_render_activities($activities); ?>
+            <?php club_render_activities_pagination($clubId, $actPage, $activitiesPages, $activitiesTotal); ?>
 
         <?php elseif ($tab === 'events' && $hasClubEvent): ?>
-            <?php if ($canManage): ?>
-                <div class="club-card-block club-card-block--actions">
-                    <div class="club-card-block__title-row">
-                        <h2 class="club-card-block__title">События клуба</h2>
-                        <a class="btn btn--primary btn--sm"
-                           href="<?= e(url('club-event-create.php?club_id=' . $clubId)) ?>">+ Создать</a>
-                    </div>
-                </div>
-            <?php endif; ?>
-            <div class="club-card-block">
-                <h2 class="club-card-block__title">Предстоящие</h2>
-                <?php if (!$upcomingEvents): ?>
-                    <p class="muted">Предстоящих событий нет.</p>
-                <?php else: ?>
-                    <?php foreach ($upcomingEvents as $e): ?>
-                        <?php $starts = strtotime((string)$e['starts_at']); ?>
-                        <div class="club-events-list__item">
-                            <div class="club-events-list__date">
-                                <div class="club-events-list__day"><?= e(date('d', $starts)) ?></div>
-                                <div class="club-events-list__mon"><?= e(club_event_month_ru((int)date('n', $starts))) ?></div>
-                            </div>
-                            <div class="club-events-list__body">
-                                <a class="club-events-list__title"
-                                   href="<?= e(url('club-event.php?id=' . (int)$e['id'])) ?>">
-                                    <?= e(club_event_type_icon((string)$e['type'])) ?>
-                                    <?= e($e['title']) ?>
-                                </a>
-                                <div class="club-events-list__meta muted">
-                                    ⏰ <?= e(date('H:i', $starts)) ?> · 👥 <?= (int)($e['going_count'] ?? 0) ?>
-                                </div>
-                            </div>
-                            <div class="club-events-list__actions">
-                                <a class="btn btn--ghost btn--sm"
-                                   href="<?= e(url('club-event.php?id=' . (int)$e['id'])) ?>">→</a>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                <?php endif; ?>
-            </div>
+            <?php club_render_events_tab($clubId, $eventScope, $upcomingEvents, $pastEvents, $isMember, $canManage, $me); ?>
 
         <?php elseif ($tab === 'members'): ?>
             <?php if ($canManage && $pendingRequests): ?>
@@ -761,63 +915,10 @@ require __DIR__ . '/includes/header.php';
 
             <?php elseif ($tab === 'activities'): ?>
                 <?php club_render_activities($activities); ?>
+                <?php club_render_activities_pagination($clubId, $actPage, $activitiesPages, $activitiesTotal); ?>
 
             <?php elseif ($tab === 'events' && $hasClubEvent): ?>
-                <?php if ($canManage): ?>
-                    <div class="club-card-block club-card-block--actions">
-                        <div class="club-card-block__title-row">
-                            <h2 class="club-card-block__title">События клуба</h2>
-                            <a class="btn btn--primary btn--sm"
-                               href="<?= e(url('club-event-create.php?club_id=' . $clubId)) ?>">+ Создать событие</a>
-                        </div>
-                    </div>
-                <?php endif; ?>
-
-                <div class="club-card-block">
-                    <h2 class="club-card-block__title">Предстоящие</h2>
-                    <?php if (!$upcomingEvents): ?>
-                        <p class="muted">Предстоящих событий нет.</p>
-                    <?php else: ?>
-                        <?php foreach ($upcomingEvents as $e): ?>
-                            <?php
-                                $starts = strtotime((string)$e['starts_at']);
-                                $myStatus = $me ? ClubEvent::myStatus((int)$e['id'], (int)$me['id']) : null;
-                            ?>
-                            <div class="club-events-list__item">
-                                <div class="club-events-list__date">
-                                    <div class="club-events-list__day"><?= e(date('d', $starts)) ?></div>
-                                    <div class="club-events-list__mon"><?= e(club_event_month_ru((int)date('n', $starts))) ?></div>
-                                </div>
-                                <div class="club-events-list__body">
-                                    <a class="club-events-list__title"
-                                       href="<?= e(url('club-event.php?id=' . (int)$e['id'])) ?>">
-                                        <?= e(club_event_type_icon((string)$e['type'])) ?>
-                                        <?= e($e['title']) ?>
-                                    </a>
-                                    <div class="club-events-list__meta muted">
-                                        ⏰ <?= e(date('H:i', $starts)) ?>
-                                        · 👥 <?= (int)($e['going_count'] ?? 0) ?>
-                                    </div>
-                                </div>
-                                <div class="club-events-list__actions">
-                                    <?php if ($myStatus === 'going'): ?>
-                                        <span class="admin-badge admin-badge--ok">Иду</span>
-                                    <?php elseif ($isMember): ?>
-                                        <form method="post" style="display:inline">
-                                            <?= csrf_field() ?>
-                                            <input type="hidden" name="action" value="event_rsvp">
-                                            <input type="hidden" name="event_id" value="<?= (int)$e['id'] ?>">
-                                            <button name="status" value="going"
-                                                    class="btn btn--ghost btn--sm">✅ Иду</button>
-                                        </form>
-                                    <?php endif; ?>
-                                    <a class="btn btn--ghost btn--sm"
-                                       href="<?= e(url('club-event.php?id=' . (int)$e['id'])) ?>">→</a>
-                                </div>
-                            </div>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
-                </div>
+                <?php club_render_events_tab($clubId, $eventScope, $upcomingEvents, $pastEvents, $isMember, $canManage, $me); ?>
 
             <?php elseif ($tab === 'members'): ?>
                 <?php if ($canManage && $pendingRequests): ?>

@@ -347,13 +347,20 @@ function route_type_label(string $type): string
             </a>
 
             <?php if ($isOwner): ?>
-                <form method="post" style="display:inline">
-                    <?= csrf_field() ?>
-                    <input type="hidden" name="action" value="toggle_public">
-                    <button class="btn btn--ghost btn--sm">
-                        <?= $isPublic ? '🔒 Скрыть' : '🌐 Опубликовать' ?>
-                    </button>
-                </form>
+    <a href="<?= e(url('route-edit.php?id=' . $routeId)) ?>"
+       class="btn btn--primary btn--sm"
+       title="Редактировать маршрут">
+        ✏️ Редактировать
+    </a>
+
+    <form method="post" style="display:inline">
+        <?= csrf_field() ?>
+        <input type="hidden" name="action" value="toggle_public">
+        <button class="btn btn--ghost btn--sm">
+            <?= $isPublic ? '🔒 Скрыть' : '🌐 Опубликовать' ?>
+        </button>
+    </form>
+    ...
 
                 <form method="post" style="display:inline"
                       onsubmit="return confirm('Удалить маршрут? Это необратимо.')">

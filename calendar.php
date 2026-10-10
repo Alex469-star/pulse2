@@ -9,14 +9,123 @@ $me = require_login();
 $userId = (int)$me['id'];
 
 // ============================================================
+// 0. ПАРАМЕТРЫ БОЛЬШОГО КАЛЕНДАРЯ (месячный вид)
+// ============================================================
+$calYear  = (int)($_GET['y'] ?? date('Y'));
+$calMonth = (int)($_GET['m'] ?? date('n'));
+
+if ($calMonth < 1 || $calMonth > 12) $calMonth = (int)date('n');
+if ($calYear < 2000 || $calYear > 2100) $calYear = (int)date('Y');
+
+$calFrom = sprintf('%04d-%02d-01 00:00:00', $calYear, $calMonth);
+$calTo   = date('Y-m-t 23:59:59', strtotime($calFrom));
+
+$calByDay = [];
+$calMonthStats = [
+    'count'         => 0,
+    'distance_m'    => 0.0,
+    'duration_sec'  => 0,
+    'elevation_m'   => 0.0,
+    'active_days'   => 0,
+    'avg_speed_sum' => 0.0,
+    'avg_speed_cnt' => 0,
+    'avg_hr_sum'    => 0,
+    'avg_hr_cnt'    => 0,
+];
+
+try {
+    $stmt = db()->prepare(
+        'SELECT id, type, title, distance_m, duration_sec, elevation_gain_m,
+                avg_speed_mps, avg_hr, started_at, created_at
+           FROM activities
+          WHERE user_id = ?
+            AND COALESCE(started_at, created_at) >= ?
+            AND COALESCE(started_at, created_at) <= ?
+       ORDER BY COALESCE(started_at, created_at) ASC'
+    );
+    $stmt->execute([$userId, $calFrom, $calTo]);
+    foreach ($stmt->fetchAll() as $r) {
+        $ts = strtotime((string)($r['started_at'] ?? $r['created_at']));
+        if ($ts === false) continue;
+        $dayKey = date('Y-m-d', $ts);
+
+        if (!isset($calByDay[$dayKey])) {
+            $calByDay[$dayKey] = [
+                'date'         => $dayKey,
+                'count'        => 0,
+                'distance_m'   => 0.0,
+                'duration_sec' => 0,
+                'types'        => [],
+                'activities'   => [],
+            ];
+        }
+
+        $calByDay[$dayKey]['count']++;
+        $calByDay[$dayKey]['distance_m']   += (float)($r['distance_m'] ?? 0);
+        $calByDay[$dayKey]['duration_sec'] += (int)($r['duration_sec'] ?? 0);
+
+        $type = (string)$r['type'];
+        if (!in_array($type, $calByDay[$dayKey]['types'], true)) {
+            $calByDay[$dayKey]['types'][] = $type;
+        }
+
+        $calByDay[$dayKey]['activities'][] = [
+            'id'            => (int)$r['id'],
+            'type'          => $type,
+            'title'         => (string)$r['title'],
+            'distance_m'    => (float)($r['distance_m'] ?? 0),
+            'duration_sec'  => (int)($r['duration_sec'] ?? 0),
+            'avg_speed_mps' => $r['avg_speed_mps'] !== null ? (float)$r['avg_speed_mps'] : null,
+            'avg_hr'        => $r['avg_hr'] !== null ? (int)$r['avg_hr'] : null,
+            'started_at'    => (string)($r['started_at'] ?? $r['created_at']),
+        ];
+
+        // Агрегаты месяца
+        $calMonthStats['count']++;
+        $calMonthStats['distance_m']    += (float)($r['distance_m'] ?? 0);
+        $calMonthStats['duration_sec']  += (int)($r['duration_sec'] ?? 0);
+        $calMonthStats['elevation_m']   += (float)($r['elevation_gain_m'] ?? 0);
+
+        if ($r['avg_speed_mps'] !== null && (float)$r['avg_speed_mps'] > 0) {
+            $calMonthStats['avg_speed_sum'] += (float)$r['avg_speed_mps'];
+            $calMonthStats['avg_speed_cnt']++;
+        }
+        if ($r['avg_hr'] !== null && (int)$r['avg_hr'] > 0) {
+            $calMonthStats['avg_hr_sum'] += (int)$r['avg_hr'];
+            $calMonthStats['avg_hr_cnt']++;
+        }
+    }
+} catch (Throwable $e) {
+    $calByDay = [];
+}
+
+$calMonthStats['active_days'] = count($calByDay);
+$calMonthStats['avg_speed_mps'] = $calMonthStats['avg_speed_cnt'] > 0
+    ? $calMonthStats['avg_speed_sum'] / $calMonthStats['avg_speed_cnt']
+    : null;
+$calMonthStats['avg_hr'] = $calMonthStats['avg_hr_cnt'] > 0
+    ? (int)round($calMonthStats['avg_hr_sum'] / $calMonthStats['avg_hr_cnt'])
+    : null;
+
+unset(
+    $calMonthStats['avg_speed_sum'], $calMonthStats['avg_speed_cnt'],
+    $calMonthStats['avg_hr_sum'],    $calMonthStats['avg_hr_cnt']
+);
+
+// Метаданные месяца
+$calFirstDay     = strtotime($calFrom);
+$calDaysInMonth  = (int)date('t', $calFirstDay);
+$calStartWeekday = (int)date('N', $calFirstDay); // 1=Пн..7=Вс
+
+// ============================================================
 // 1. ЗАГРУЗКА ВСЕХ АКТИВНОСТЕЙ ЗА 365 ДНЕЙ
 // ============================================================
 $activities = [];
-$byDate = [];      // ['2026-09-26' => [count, distance, duration, hr_sum, pwr_sum, ids]]
-$byType = [];      // ['run' => [...]]
-$byMonth = [];     // ['2026-09' => [...]]
-$byWeekday = [];   // ['Mon' => count] — какой день недели активнее
-$byHour = [];      // ['07' => count] — в какое время дня чаще
+$byDate = [];
+$byType = [];
+$byMonth = [];
+$byWeekday = [];
+$byHour = [];
 
 try {
     $stmt = db()->prepare(
@@ -35,7 +144,7 @@ try {
     $activities = [];
 }
 
-// Полные суммы за всё время (для «за всё время»)
+// Полные суммы за всё время
 $totalsAllTime = [
     'count' => 0, 'distance' => 0, 'duration' => 0,
     'elevation' => 0, 'calories' => 0,
@@ -70,7 +179,7 @@ foreach ($activities as $a) {
     $dateKey  = date('Y-m-d', $ts);
     $monthKey = date('Y-m', $ts);
     $typeKey  = (string)$a['type'];
-    $weekday  = date('D', $ts); // Mon, Tue...
+    $weekday  = date('D', $ts);
     $hour     = date('H', $ts);
 
     $dist = (float)($a['distance_m'] ?? 0);
@@ -79,7 +188,6 @@ foreach ($activities as $a) {
     $cal  = (int)($a['calories'] ?? 0);
     $hr   = $a['avg_hr']       !== null ? (int)$a['avg_hr']       : null;
     $pwr  = $a['avg_power_w']  !== null ? (int)$a['avg_power_w']  : null;
-    $cad  = $a['avg_cadence']  !== null ? (int)$a['avg_cadence']  : null;
 
     if (!isset($byDate[$dateKey])) {
         $byDate[$dateKey] = [
@@ -161,7 +269,6 @@ $statsMonth = sum_period($byDate, $monthFrom, $monthTo);
 $statsYear  = sum_period($byDate, $yearFrom, $yearTo);
 $statsToday = $byDate[$today] ?? null;
 
-// Прошлая неделя / месяц / год — для сравнения
 $prevWeekStart = date('Y-m-d', strtotime('monday last week'));
 $prevWeekEnd   = date('Y-m-d', strtotime('sunday last week'));
 $prevWeek      = sum_period($byDate, $prevWeekStart, $prevWeekEnd);
@@ -174,13 +281,12 @@ $prevYearFrom = date((date('Y') - 1) . '-01-01');
 $prevYearTo   = date((date('Y') - 1) . '-12-31');
 $prevYear     = sum_period($byDate, $prevYearFrom, $prevYearTo);
 
-// Разница
 $diffWeekCount    = $statsWeek['count'] - $prevWeek['count'];
 $diffWeekDistance = $statsWeek['distance'] - $prevWeek['distance'];
 $diffMonthCount   = $statsMonth['count'] - $prevMonth['count'];
 $diffMonthDist    = $statsMonth['distance'] - $prevMonth['distance'];
 
-// Streak — дней подряд (с сегодня в прошлое)
+// Streak
 $streak = 0;
 $checkDate = $today;
 for ($i = 0; $i < 365; $i++) {
@@ -192,7 +298,7 @@ for ($i = 0; $i < 365; $i++) {
     }
 }
 
-// Лучший streak за год
+// Лучший streak
 $bestStreak = 0;
 $currentRun = 0;
 $sortedDates = array_keys($byDate);
@@ -213,7 +319,7 @@ foreach ($sortedDates as $i => $d) {
 }
 
 // ============================================================
-// 3. РЕКОРДЫ И ДОСТИЖЕНИЯ
+// 3. РЕКОРДЫ
 // ============================================================
 $longestActivity = null;
 $fastestActivity = null;
@@ -234,7 +340,6 @@ foreach ($activities as $a) {
     }
 }
 
-// Лучший день / неделя / месяц
 $bestDay = null;
 foreach ($byDate as $date => $d) {
     if ($bestDay === null || $d['distance'] > $bestDay['distance']) {
@@ -242,7 +347,6 @@ foreach ($byDate as $date => $d) {
     }
 }
 
-// Недели за год — найти лучшую
 $weeksAll = [];
 $start = strtotime('monday this week -52 week');
 $end   = strtotime('sunday this week');
@@ -266,18 +370,15 @@ foreach ($byMonth as $m => $d) {
     }
 }
 
-// Средние за год
 $avgDistPerActivity = $statsYear['count'] > 0
     ? $statsYear['distance'] / $statsYear['count'] : 0;
 $avgDurationPerActivity = $statsYear['count'] > 0
     ? $statsYear['duration'] / $statsYear['count'] : 0;
 $avgDistPerWeek = $statsYear['distance'] / 52;
 
-// Средний темп/скорость
 $avgPaceSecPerKm = ($statsYear['distance'] > 0 && $statsYear['duration'] > 0)
     ? $statsYear['duration'] / ($statsYear['distance'] / 1000) : 0;
 
-// Количество активных дней и дней отдыха за год
 $activeDays = 0;
 foreach ($byDate as $date => $d) {
     if ($date >= $yearFrom && $date <= $yearTo) $activeDays++;
@@ -285,7 +386,6 @@ foreach ($byDate as $date => $d) {
 $daysSinceYearStart = (int)((strtotime($today) - strtotime($yearFrom)) / 86400) + 1;
 $restDays = max(0, $daysSinceYearStart - $activeDays);
 
-// Самая длинная серия отдыха за год
 $longestRest = 0;
 $currentRest = 0;
 $cursor = strtotime($yearFrom);
@@ -302,12 +402,9 @@ while ($cursor <= $todayTs) {
 }
 
 // ============================================================
-// 4. МЕТРИКИ ДАТЧИКОВ (средний пульс, мощность, каденс за год)
+// 4. ДАТЧИКИ
 // ============================================================
-$sensorTotals = [
-    'hr_sum' => 0, 'hr_cnt' => 0,
-    'pwr_sum' => 0, 'pwr_cnt' => 0,
-];
+$sensorTotals = ['hr_sum' => 0, 'hr_cnt' => 0, 'pwr_sum' => 0, 'pwr_cnt' => 0];
 foreach ($byDate as $date => $d) {
     if ($date >= $yearFrom && $date <= $yearTo) {
         $sensorTotals['hr_sum']  += $d['hr_sum']  ?? 0;
@@ -320,7 +417,7 @@ $avgHrYear  = $sensorTotals['hr_cnt']  > 0 ? (int)round($sensorTotals['hr_sum'] 
 $avgPwrYear = $sensorTotals['pwr_cnt'] > 0 ? (int)round($sensorTotals['pwr_sum'] / $sensorTotals['pwr_cnt']) : null;
 
 // ============================================================
-// 5. ГРАФИК ПО НЕДЕЛЯМ (12 недель)
+// 5. ГРАФИК 12 НЕДЕЛЬ
 // ============================================================
 $weeks = [];
 for ($i = 11; $i >= 0; $i--) {
@@ -332,7 +429,7 @@ for ($i = 11; $i >= 0; $i--) {
 $maxWeekDistance = max(1, max(array_column($weeks, 'distance')));
 
 // ============================================================
-// 6. МЕСЯЦЫ ГОДА (12 столбцов)
+// 6. МЕСЯЦЫ ГОДА
 // ============================================================
 $monthsYear = [];
 for ($m = 1; $m <= 12; $m++) {
@@ -347,17 +444,17 @@ for ($m = 1; $m <= 12; $m++) {
 $maxMonthDistance = max(1, max(array_column(array_column($monthsYear, 'data'), 'distance')));
 
 // ============================================================
-// 7. ЦЕЛЬ НА НЕДЕЛЮ (можно хранить в users, но пока захардкодим)
+// 7. ЦЕЛЬ
 // ============================================================
-$weeklyGoalDistance = 30000; // 30 км/нед — можно вынести в настройки
-$weeklyGoalCount    = 4;     // 4 активности/нед
+$weeklyGoalDistance = 30000;
+$weeklyGoalCount    = 4;
 $weekProgress       = $weeklyGoalDistance > 0
     ? min(100, round(($statsWeek['distance'] / $weeklyGoalDistance) * 100)) : 0;
 $weekCountProgress  = $weeklyGoalCount > 0
     ? min(100, round(($statsWeek['count'] / $weeklyGoalCount) * 100)) : 0;
 
 // ============================================================
-// 8. КАЛЕНДАРЬ-СЕТКА (52 недели)
+// 8. HEATMAP 52 НЕДЕЛИ
 // ============================================================
 $calendarStart = date('Y-m-d', strtotime('monday this week -52 week'));
 $calendarEnd   = date('Y-m-d', strtotime('sunday this week'));
@@ -393,12 +490,10 @@ function activity_level(?array $data, float $maxDistance): int
     return 4;
 }
 
-// Топ-5 активностей по дистанции
 $topActivities = $activities;
 usort($topActivities, fn($a, $b) => (float)$b['distance_m'] <=> (float)$a['distance_m']);
 $topActivities = array_slice($topActivities, 0, 5);
 
-// День недели с максимумом
 $bestWeekday = null;
 $bestWeekdayCount = 0;
 $weekdayLabels = ['Mon' => 'Понедельник', 'Tue' => 'Вторник', 'Wed' => 'Среда',
@@ -410,7 +505,6 @@ foreach ($byWeekday as $wd => $cnt) {
     }
 }
 
-// Час с максимумом
 $bestHour = null;
 $bestHourCount = 0;
 foreach ($byHour as $h => $cnt) {
@@ -421,8 +515,15 @@ foreach ($byHour as $h => $cnt) {
 }
 
 $pageTitle = 'Календарь и статистика';
+
+$extraCss = [url('assets/css/calendar.css')];
+$extraJs  = [url('assets/js/calendar.js')];
+
 require __DIR__ . '/includes/header.php';
 
+// ============================================================
+// ХЕЛПЕРЫ
+// ============================================================
 function activity_icon(string $type): string {
     return match ($type) {
         'run' => '🏃', 'ride' => '🚴', 'swim' => '🏊', 'ski' => '⛷️',
@@ -442,8 +543,234 @@ function format_sec_to_hm(int $sec): string {
     $m = intdiv($sec % 3600, 60);
     return $h > 0 ? sprintf('%d ч %d мин', $h, $m) : sprintf('%d мин', $m);
 }
+function cal_month_ru(int $m): string {
+    return ['','Январь','Февраль','Март','Апрель','Май','Июнь',
+            'Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'][$m] ?? '';
+}
+function cal_type_color(string $t): string {
+    return match ($t) {
+        'run'  => '#e94f2e', 'ride' => '#2e7de9', 'swim' => '#2ec4e9',
+        'ski'  => '#5e9ee9', 'walk' => '#68b96b', 'hike' => '#8a6a3a',
+        default => '#8a8a8f',
+    };
+}
+function cal_format_distance(float $m): string {
+    $km = $m / 1000;
+    if ($km < 1) return (int)round($m) . ' м';
+    if ($km < 10) return number_format($km, 2, '.', '') . ' км';
+    return number_format($km, 1, '.', '') . ' км';
+}
+function cal_format_duration_hm(int $sec): string {
+    if ($sec <= 0) return '—';
+    $h = intdiv($sec, 3600);
+    $m = intdiv($sec % 3600, 60);
+    return $h > 0 ? sprintf('%d ч %d мин', $h, $m) : sprintf('%d мин', $m);
+}
+function cal_format_pace(float $distM, int $durSec): string {
+    if ($distM <= 0 || $durSec <= 0) return '—';
+    $secPerKm = $durSec / ($distM / 1000);
+    $m = intdiv((int)$secPerKm, 60);
+    $s = (int)$secPerKm % 60;
+    return sprintf('%d:%02d /км', $m, $s);
+}
+
+/**
+ * Блок «Итоги месяца» под большим календарём.
+ */
+function cal_month_stats_block(array $stats, string $monthLabel): void
+{
+    $hasData = (int)$stats['count'] > 0;
+    ?>
+    <div class="cal-month-stats" id="cal-month-stats">
+        <div class="cal-month-stats__head">
+            <h3 class="cal-month-stats__title">Итоги месяца</h3>
+            <span class="cal-month-stats__month"><?= e($monthLabel) ?></span>
+        </div>
+
+        <?php if (!$hasData): ?>
+            <div class="cal-month-stats__empty">
+                <span class="cal-month-stats__empty-icon">📭</span>
+                <div>
+                    <strong>В этом месяце тренировок не было</strong>
+                    <p class="muted">Загрузите первую активность — статистика появится здесь</p>
+                </div>
+            </div>
+        <?php else: ?>
+            <div class="cal-month-stats__grid">
+                <div class="cal-month-stat">
+                    <div class="cal-month-stat__icon">🛣</div>
+                    <div class="cal-month-stat__value"><?= e(cal_format_distance((float)$stats['distance_m'])) ?></div>
+                    <div class="cal-month-stat__label">Дистанция</div>
+                </div>
+                <div class="cal-month-stat">
+                    <div class="cal-month-stat__icon">🏃</div>
+                    <div class="cal-month-stat__value"><?= (int)$stats['count'] ?></div>
+                    <div class="cal-month-stat__label">Тренировок</div>
+                </div>
+                <div class="cal-month-stat">
+                    <div class="cal-month-stat__icon">⏱</div>
+                    <div class="cal-month-stat__value"><?= e(cal_format_duration_hm((int)$stats['duration_sec'])) ?></div>
+                    <div class="cal-month-stat__label">Время</div>
+                </div>
+                <div class="cal-month-stat">
+                    <div class="cal-month-stat__icon">⛰</div>
+                    <div class="cal-month-stat__value"><?= (int)$stats['elevation_m'] ?> м</div>
+                    <div class="cal-month-stat__label">Набор высоты</div>
+                </div>
+                <div class="cal-month-stat">
+                    <div class="cal-month-stat__icon">📅</div>
+                    <div class="cal-month-stat__value"><?= (int)$stats['active_days'] ?></div>
+                    <div class="cal-month-stat__label">Активных дней</div>
+                </div>
+                <div class="cal-month-stat">
+                    <div class="cal-month-stat__icon">⚡</div>
+                    <div class="cal-month-stat__value">
+                        <?= e(cal_format_pace((float)$stats['distance_m'], (int)$stats['duration_sec'])) ?>
+                    </div>
+                    <div class="cal-month-stat__label">Средний темп</div>
+                </div>
+                <?php if (!empty($stats['avg_hr'])): ?>
+                    <div class="cal-month-stat">
+                        <div class="cal-month-stat__icon">❤️</div>
+                        <div class="cal-month-stat__value">
+                            <?= (int)$stats['avg_hr'] ?><small> уд/мин</small>
+                        </div>
+                        <div class="cal-month-stat__label">Средний пульс</div>
+                    </div>
+                <?php endif; ?>
+            </div>
+
+            <?php
+                $cnt = max(1, (int)$stats['count']);
+                $avgDist = (float)$stats['distance_m'] / $cnt;
+                $avgDur  = (int)round((int)$stats['duration_sec'] / $cnt);
+            ?>
+            <div class="cal-month-stats__footer">
+                <span class="muted">
+                    В среднем за активность:
+                    <strong><?= e(cal_format_distance($avgDist)) ?></strong>
+                    ·
+                    <strong><?= e(cal_format_duration_hm($avgDur)) ?></strong>
+                </span>
+            </div>
+        <?php endif; ?>
+    </div>
+    <?php
+}
+
+$calMonthLabel = cal_month_ru($calMonth) . ' ' . $calYear;
 ?>
 
+<!-- ============================================================
+     БОЛЬШОЙ КАЛЕНДАРЬ
+     ============================================================ -->
+<section class="cal-big" id="cal-big">
+    <div class="cal-big__head">
+        <div class="cal-big__nav">
+            <button type="button" class="cal-big__btn" data-cal-prev aria-label="Предыдущий месяц">←</button>
+            <h2 class="cal-big__title" id="cal-title"><?= e($calMonthLabel) ?></h2>
+            <button type="button" class="cal-big__btn" data-cal-next aria-label="Следующий месяц">→</button>
+        </div>
+        <button type="button" class="cal-big__today" data-cal-today>Сегодня</button>
+    </div>
+
+    <div class="cal-grid" id="cal-grid">
+        <div class="cal-grid__head">
+            <?php foreach (['Пн','Вт','Ср','Чт','Пт','Сб','Вс'] as $wd): ?>
+                <div class="cal-grid__wd"><?= e($wd) ?></div>
+            <?php endforeach; ?>
+        </div>
+
+        <div class="cal-grid__body">
+            <?php
+            $offset = $calStartWeekday - 1;
+            for ($i = 0; $i < $offset; $i++):
+            ?>
+                <div class="cal-day cal-day--empty"></div>
+            <?php endfor; ?>
+
+            <?php for ($d = 1; $d <= $calDaysInMonth; $d++): ?>
+                <?php
+                    $dateKey = sprintf('%04d-%02d-%02d', $calYear, $calMonth, $d);
+                    $dayData = $calByDay[$dateKey] ?? null;
+                    $isToday = $dateKey === $today;
+
+                    $classes = 'cal-day';
+                    if ($isToday)  $classes .= ' cal-day--today';
+                    if ($dayData)  $classes .= ' cal-day--has';
+                    else           $classes .= ' cal-day--empty-day';
+                ?>
+                <div class="<?= $classes ?>" data-date="<?= e($dateKey) ?>">
+                    <div class="cal-day__num"><?= $d ?></div>
+
+                    <?php if ($dayData): ?>
+                        <div class="cal-day__dots">
+                            <?php foreach (array_slice($dayData['types'], 0, 4) as $t): ?>
+                                <span class="cal-day__dot" style="background:<?= e(cal_type_color($t)) ?>"></span>
+                            <?php endforeach; ?>
+                        </div>
+                        <div class="cal-day__dist"><?= e(cal_format_distance((float)$dayData['distance_m'])) ?></div>
+                        <?php if ($dayData['count'] > 1): ?>
+                            <div class="cal-day__count"><?= (int)$dayData['count'] ?> активн.</div>
+                        <?php endif; ?>
+                    <?php endif; ?>
+                </div>
+            <?php endfor; ?>
+
+            <?php
+            $totalCells = $offset + $calDaysInMonth;
+            $remainder = $totalCells % 7;
+            if ($remainder !== 0):
+                $tail = 7 - $remainder;
+                for ($i = 0; $i < $tail; $i++):
+            ?>
+                <div class="cal-day cal-day--empty"></div>
+            <?php endfor; endif; ?>
+        </div>
+    </div>
+
+
+<!-- ============================================================
+     ИТОГИ МЕСЯЦА
+     ============================================================ -->
+<?php cal_month_stats_block($calMonthStats, $calMonthLabel); ?>
+
+<!-- Модалка дня -->
+<div class="cal-modal" id="cal-modal" aria-hidden="true">
+    <div class="cal-modal__backdrop" data-cal-close></div>
+    <div class="cal-modal__dialog" role="dialog" aria-modal="true">
+        <div class="cal-modal__header">
+            <div>
+                <h3 class="cal-modal__title"></h3>
+                <div class="cal-modal__subtitle"></div>
+            </div>
+            <button type="button" class="cal-modal__close" data-cal-close aria-label="Закрыть">×</button>
+        </div>
+        <div class="cal-modal__list"></div>
+    </div>
+</div>
+</section>
+<script>
+window.__CALENDAR__ = {
+    year: <?= (int)$calYear ?>,
+    month: <?= (int)$calMonth ?>,
+    apiUrl: <?= json_encode(url('api/calendar-month.php')) ?>,
+    activityUrl: <?= json_encode(url('activity.php?id=')) ?>,
+    initialData: <?= json_encode([
+        'year'          => $calYear,
+        'month'         => $calMonth,
+        'month_label'   => $calMonthLabel,
+        'days_in_month' => $calDaysInMonth,
+        'start_weekday' => $calStartWeekday,
+        'days'          => $calByDay,
+        'stats'         => $calMonthStats,
+    ], JSON_UNESCAPED_UNICODE) ?>
+};
+</script>
+
+<!-- ============================================================
+     ОСНОВНОЙ КОНТЕНТ — статистика, рекорды, графики
+     ============================================================ -->
 <section class="calendar-page">
     <header class="calendar-page__head">
         <div>
@@ -453,7 +780,7 @@ function format_sec_to_hm(int $sec): string {
         <a href="<?= e(url('activity-upload.php')) ?>" class="btn btn--primary">+ Активность</a>
     </header>
 
-    <!-- ============ МОТИВАЦИОННЫЙ БЛОК ============ -->
+    <!-- ============ МОТИВАЦИЯ ============ -->
     <?php
         $motivation = [];
 
@@ -531,7 +858,7 @@ function format_sec_to_hm(int $sec): string {
         </div>
     </div>
 
-    <!-- ============ КАЛЕНДАРЬ-СЕТКА ============ -->
+    <!-- ============ HEATMAP ============ -->
     <div class="calendar-card">
         <div class="calendar-card__head">
             <h2 class="calendar-card__title">Год активности</h2>
@@ -566,20 +893,12 @@ function format_sec_to_hm(int $sec): string {
                                            . ' · ' . $day['data']['count'] . ' активн.'
                                            . ' · ' . format_distance($day['data']['distance'])
                                            . ' · ' . format_sec_to_hm((int)$day['data']['duration']);
-                                    $link = url('calendar.php?date=' . $day['date']);
                                 } else {
                                     $title = $dateLabel . ' · нет активностей';
-                                    $link = null;
                                 }
                             ?>
-                            <?php if ($link): ?>
-                                <a href="<?= e($link) ?>"
-                                   class="cal-cell cal-cell--l<?= $level ?> <?= $isToday ? 'cal-cell--today' : '' ?>"
-                                   title="<?= e($title) ?>"></a>
-                            <?php else: ?>
-                                <span class="cal-cell cal-cell--l<?= $level ?> <?= $isToday ? 'cal-cell--today' : '' ?>"
-                                      title="<?= e($title) ?>"></span>
-                            <?php endif; ?>
+                            <span class="cal-cell cal-cell--l<?= $level ?> <?= $isToday ? 'cal-cell--today' : '' ?>"
+                                  title="<?= e($title) ?>"></span>
                         <?php endforeach; ?>
                     </div>
                 <?php endforeach; ?>
@@ -600,22 +919,22 @@ function format_sec_to_hm(int $sec): string {
         </div>
     </div>
 
-    <!-- ============ СВОДНАЯ СТАТИСТИКА ПО ПЕРИОДАМ ============ -->
+    <!-- ============ СВОДНАЯ СТАТИСТИКА ============ -->
     <h2 class="profile-section-title" style="margin-top:32px">Статистика по периодам</h2>
 
     <div class="cal-periods">
         <?php
         $periods = [
-            ['label' => 'Сегодня',      'data' => $statsToday ? [
+            ['label' => 'Сегодня', 'data' => $statsToday ? [
                 'count' => $statsToday['count'],
                 'distance' => $statsToday['distance'],
                 'duration' => $statsToday['duration'],
                 'elevation' => $statsToday['elevation'],
                 'calories' => $statsToday['calories'],
             ] : ['count'=>0,'distance'=>0,'duration'=>0,'elevation'=>0,'calories'=>0]],
-            ['label' => 'Эта неделя',   'data' => $statsWeek],
-            ['label' => 'Этот месяц',   'data' => $statsMonth],
-            ['label' => 'Этот год',     'data' => $statsYear],
+            ['label' => 'Эта неделя', 'data' => $statsWeek],
+            ['label' => 'Этот месяц', 'data' => $statsMonth],
+            ['label' => 'Этот год',   'data' => $statsYear],
         ];
         foreach ($periods as $p):
             $d = $p['data'];
@@ -634,7 +953,7 @@ function format_sec_to_hm(int $sec): string {
         <?php endforeach; ?>
     </div>
 
-    <!-- ============ СРАВНЕНИЕ С ПРОШЛЫМИ ПЕРИОДАМИ ============ -->
+    <!-- ============ СРАВНЕНИЕ ============ -->
     <h2 class="profile-section-title" style="margin-top:32px">Сравнение с прошлыми периодами</h2>
 
     <div class="cal-compare">
@@ -762,7 +1081,7 @@ function format_sec_to_hm(int $sec): string {
         <?php endif; ?>
     </div>
 
-    <!-- ============ ГРАФИКИ: НЕДЕЛИ И МЕСЯЦЫ ============ -->
+    <!-- ============ ГРАФИКИ ============ -->
     <h2 class="profile-section-title" style="margin-top:32px">Динамика</h2>
 
     <div class="cal-chart">
@@ -920,7 +1239,7 @@ function format_sec_to_hm(int $sec): string {
         </div>
     <?php endif; ?>
 
-    <!-- ============ ТОП-5 АКТИВНОСТЕЙ ============ -->
+    <!-- ============ ТОП-5 ============ -->
     <?php if ($topActivities): ?>
         <h2 class="profile-section-title" style="margin-top:32px">Топ-5 по дистанции за год</h2>
         <div class="cal-top">
@@ -938,7 +1257,7 @@ function format_sec_to_hm(int $sec): string {
         </div>
     <?php endif; ?>
 
-    <!-- ============ РАСПРЕДЕЛЕНИЕ ПО ТИПАМ ============ -->
+    <!-- ============ ПО ТИПАМ ============ -->
     <?php if ($byType): ?>
         <?php
             uasort($byType, fn($a, $b) => $b['count'] <=> $a['count']);

@@ -70,8 +70,10 @@ if (!function_exists('notif_text')) {
         $message = (string)($n['message'] ?? '');
         $targetType = (string)($n['target_type'] ?? '');
 
+        // Если это уведомление от клуба — оно может содержать текст от админа
+        // с переносами строк. Рендерим с nl2br.
         if (strpos($targetType, 'club') === 0 && $message !== '') {
-            return e($message);
+            return nl2br(e($message));
         }
 
         return match ($n['type']) {
@@ -85,12 +87,12 @@ if (!function_exists('notif_text')) {
             'post_comment_reply' => $actor . ' ответил на ваш комментарий к записи',
             'segment_lost_lead' => $actor . ' обошёл вас на сегменте',
             'segment_new_lead'  => 'Вы вышли на <strong>1-е место</strong> на сегменте',
-            'club_join'         => e($message !== '' ? $message : ($actor . ' вступил в клуб')),
-            'club_post'         => e($message !== '' ? $message : ($actor . ' написал на стене клуба')),
-            'club_role'         => e($message !== '' ? $message : 'Ваша роль в клубе изменена'),
-            'club_event'        => e($message !== '' ? $message : 'Новое событие в клубе'),
-            'system'            => e($message !== '' ? $message : 'Системное уведомление'),
-            default             => e($message !== '' ? $message : 'Уведомление'),
+            'club_join'         => $message !== '' ? nl2br(e($message)) : e($actor . ' вступил в клуб'),
+            'club_post'         => $message !== '' ? nl2br(e($message)) : e($actor . ' написал на стене клуба'),
+            'club_role'         => $message !== '' ? nl2br(e($message)) : 'Ваша роль в клубе изменена',
+            'club_event'        => $message !== '' ? nl2br(e($message)) : 'Новое событие в клубе',
+            'system'            => $message !== '' ? nl2br(e($message)) : 'Системное уведомление',
+            default             => $message !== '' ? nl2br(e($message)) : 'Уведомление',
         };
     }
 }

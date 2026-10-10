@@ -73,6 +73,7 @@ if (!function_exists('feed_fetch_unified')) {
 
         $aType = ($type !== '') ? $type : '';
 
+        // ---- Ветка 1: активности ----
         $sqlA = 'SELECT
                     "activity" AS kind,
                     a.id AS id,
@@ -92,13 +93,19 @@ if (!function_exists('feed_fetch_unified')) {
                     u.username, u.display_name, u.avatar_url,
                     (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id) AS likes_count,
                     (SELECT COUNT(*) FROM activity_comments c WHERE c.activity_id = a.id) AS comments_count,
-                    (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id AND l.user_id = :vid) AS liked_by_me
+                    (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id AND l.user_id = :vid) AS liked_by_me,
+                    NULL AS club_id, NULL AS club_name, NULL AS club_slug,
+                    NULL AS event_starts_at, NULL AS event_ends_at,
+                    NULL AS event_location, NULL AS event_city,
+                    NULL AS event_cover_url, NULL AS event_attendees_count,
+                    NULL AS event_max_attendees, NULL AS event_status
                  FROM activities a
                  JOIN users u ON u.id = a.user_id
                  WHERE 1=1' . $whereActivity;
         if ($aType !== '') $sqlA .= ' AND a.type = :atype';
         $union[] = $sqlA;
 
+        // ---- Ветка 2: посты ----
         $sqlP = 'SELECT
                     "post" AS kind,
                     p.id AS id,
@@ -118,11 +125,65 @@ if (!function_exists('feed_fetch_unified')) {
                     u.username, u.display_name, u.avatar_url,
                     (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id) AS likes_count,
                     (SELECT COUNT(*) FROM post_comments c WHERE c.post_id = p.id) AS comments_count,
-                    (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id AND l.user_id = :vid2) AS liked_by_me
+                    (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id AND l.user_id = :vid2) AS liked_by_me,
+                    NULL AS club_id, NULL AS club_name, NULL AS club_slug,
+                    NULL AS event_starts_at, NULL AS event_ends_at,
+                    NULL AS event_location, NULL AS event_city,
+                    NULL AS event_cover_url, NULL AS event_attendees_count,
+                    NULL AS event_max_attendees, NULL AS event_status
                  FROM posts p
                  JOIN users u ON u.id = p.user_id
                  WHERE 1=1' . $wherePost;
         $union[] = $sqlP;
+
+        // ---- Ветка 3: события клубов (только для tab=all) ----
+        $bindEventUserId = null;
+        if ($tab === 'all') {
+            $bindEventUserId = $viewerId;
+
+            $sqlE = 'SELECT
+                        "club_event" AS kind,
+                        e.id AS id,
+                        e.creator_id AS user_id,
+                        e.starts_at AS started_at,
+                        e.created_at AS created_at,
+                        COALESCE(e.starts_at, e.created_at) AS sort_at,
+                        e.type AS type,
+                        e.title AS title,
+                        e.description AS description,
+                        NULL AS distance_m,
+                        NULL AS duration_sec,
+                        NULL AS avg_speed_mps,
+                        NULL AS elevation_gain_m,
+                        NULL AS track_json,
+                        "public" AS visibility,
+                        u.username, u.display_name, u.avatar_url,
+                        0 AS likes_count,
+                        (SELECT COUNT(*) FROM club_event_comments ec WHERE ec.event_id = e.id) AS comments_count,
+                        0 AS liked_by_me,
+                        e.club_id AS club_id,
+                        c.name AS club_name,
+                        c.slug AS club_slug,
+                        e.starts_at AS event_starts_at,
+                        e.ends_at AS event_ends_at,
+                        e.location AS event_location,
+                        e.city AS event_city,
+                        e.cover_url AS event_cover_url,
+                        e.attendees_count AS event_attendees_count,
+                        e.max_attendees AS event_max_attendees,
+                        e.status AS event_status
+                     FROM club_events e
+                     JOIN users u ON u.id = e.creator_id
+                     JOIN clubs c ON c.id = e.club_id
+                     JOIN club_members mine
+                          ON mine.club_id = e.club_id
+                         AND mine.user_id = :mine_e
+                         AND mine.status = "active"
+                     WHERE e.status = "scheduled"
+                       AND c.is_banned = 0
+                       AND e.visibility IN ("public", "members")';
+            $union[] = $sqlE;
+        }
 
         $sql = '(' . implode(') UNION ALL (', $union) . ') ORDER BY sort_at DESC, id DESC LIMIT :lim OFFSET :off';
         $stmt = db()->prepare($sql);
@@ -135,6 +196,9 @@ if (!function_exists('feed_fetch_unified')) {
         }
         foreach ($bindSets['post'] as $name => $val) {
             $stmt->bindValue(':' . $name, $val, PDO::PARAM_INT);
+        }
+        if ($bindEventUserId !== null) {
+            $stmt->bindValue(':mine_e', $bindEventUserId, PDO::PARAM_INT);
         }
         if ($aType !== '') $stmt->bindValue(':atype', $aType);
 
@@ -150,6 +214,7 @@ if (!function_exists('feed_fetch_unified_clubs')) {
     {
         $aType = ($type !== '') ? $type : '';
 
+        // ---- Ветка 1: активности участников моих клубов ----
         $sqlA = 'SELECT
                     "activity" AS kind,
                     a.id AS id,
@@ -169,7 +234,12 @@ if (!function_exists('feed_fetch_unified_clubs')) {
                     u.username, u.display_name, u.avatar_url,
                     (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id) AS likes_count,
                     (SELECT COUNT(*) FROM activity_comments c WHERE c.activity_id = a.id) AS comments_count,
-                    (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id AND l.user_id = :vid) AS liked_by_me
+                    (SELECT COUNT(*) FROM activity_likes l WHERE l.activity_id = a.id AND l.user_id = :vid) AS liked_by_me,
+                    NULL AS club_id, NULL AS club_name, NULL AS club_slug,
+                    NULL AS event_starts_at, NULL AS event_ends_at,
+                    NULL AS event_location, NULL AS event_city,
+                    NULL AS event_cover_url, NULL AS event_attendees_count,
+                    NULL AS event_max_attendees, NULL AS event_status
                  FROM activities a
                  JOIN users u ON u.id = a.user_id
                  JOIN club_members cm ON cm.user_id = u.id AND cm.status = "active"
@@ -180,6 +250,7 @@ if (!function_exists('feed_fetch_unified_clubs')) {
                  WHERE a.visibility = "public"';
         if ($aType !== '') $sqlA .= ' AND a.type = :atype';
 
+        // ---- Ветка 2: посты участников моих клубов ----
         $sqlP = 'SELECT
                     "post" AS kind,
                     p.id AS id,
@@ -199,7 +270,12 @@ if (!function_exists('feed_fetch_unified_clubs')) {
                     u.username, u.display_name, u.avatar_url,
                     (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id) AS likes_count,
                     (SELECT COUNT(*) FROM post_comments c WHERE c.post_id = p.id) AS comments_count,
-                    (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id AND l.user_id = :vid3) AS liked_by_me
+                    (SELECT COUNT(*) FROM post_likes l WHERE l.post_id = p.id AND l.user_id = :vid3) AS liked_by_me,
+                    NULL AS club_id, NULL AS club_name, NULL AS club_slug,
+                    NULL AS event_starts_at, NULL AS event_ends_at,
+                    NULL AS event_location, NULL AS event_city,
+                    NULL AS event_cover_url, NULL AS event_attendees_count,
+                    NULL AS event_max_attendees, NULL AS event_status
                  FROM posts p
                  JOIN users u ON u.id = p.user_id
                  JOIN club_members cm ON cm.user_id = u.id AND cm.status = "active"
@@ -209,13 +285,58 @@ if (!function_exists('feed_fetch_unified_clubs')) {
                      AND mine.status = "active"
                  WHERE p.visibility = "public"';
 
-        $sql = '(' . $sqlA . ') UNION ALL (' . $sqlP . ') ORDER BY sort_at DESC, id DESC LIMIT :lim OFFSET :off';
+        // ---- Ветка 3: события моих клубов ----
+        $sqlE = 'SELECT
+                    "club_event" AS kind,
+                    e.id AS id,
+                    e.creator_id AS user_id,
+                    e.starts_at AS started_at,
+                    e.created_at AS created_at,
+                    COALESCE(e.starts_at, e.created_at) AS sort_at,
+                    e.type AS type,
+                    e.title AS title,
+                    e.description AS description,
+                    NULL AS distance_m,
+                    NULL AS duration_sec,
+                    NULL AS avg_speed_mps,
+                    NULL AS elevation_gain_m,
+                    NULL AS track_json,
+                    "public" AS visibility,
+                    u.username, u.display_name, u.avatar_url,
+                    0 AS likes_count,
+                    (SELECT COUNT(*) FROM club_event_comments ec WHERE ec.event_id = e.id) AS comments_count,
+                    0 AS liked_by_me,
+                    e.club_id AS club_id,
+                    c.name AS club_name,
+                    c.slug AS club_slug,
+                    e.starts_at AS event_starts_at,
+                    e.ends_at AS event_ends_at,
+                    e.location AS event_location,
+                    e.city AS event_city,
+                    e.cover_url AS event_cover_url,
+                    e.attendees_count AS event_attendees_count,
+                    e.max_attendees AS event_max_attendees,
+                    e.status AS event_status
+                 FROM club_events e
+                 JOIN users u ON u.id = e.creator_id
+                 JOIN clubs c ON c.id = e.club_id
+                 JOIN club_members mine
+                      ON mine.club_id = e.club_id
+                     AND mine.user_id = :vid5
+                     AND mine.status = "active"
+                 WHERE e.status = "scheduled"
+                   AND c.is_banned = 0
+                   AND e.visibility IN ("public", "members")';
+
+        $sql = '(' . $sqlA . ') UNION ALL (' . $sqlP . ') UNION ALL (' . $sqlE . ')
+                ORDER BY sort_at DESC, id DESC LIMIT :lim OFFSET :off';
 
         $stmt = db()->prepare($sql);
         $stmt->bindValue(':vid',  $viewerId, PDO::PARAM_INT);
         $stmt->bindValue(':vid2', $viewerId, PDO::PARAM_INT);
         $stmt->bindValue(':vid3', $viewerId, PDO::PARAM_INT);
         $stmt->bindValue(':vid4', $viewerId, PDO::PARAM_INT);
+        $stmt->bindValue(':vid5', $viewerId, PDO::PARAM_INT);
         if ($aType !== '') $stmt->bindValue(':atype', $aType);
         $stmt->bindValue(':lim', $limit,  PDO::PARAM_INT);
         $stmt->bindValue(':off', $offset, PDO::PARAM_INT);
@@ -255,8 +376,29 @@ if (!function_exists('feed_format_activity_date')) {
     }
 }
 
+if (!function_exists('feed_event_type_icon')) {
+    function feed_event_type_icon(string $t): string
+    {
+        return match ($t) {
+            'training' => '🏃', 'race' => '🏆', 'meeting' => '☕',
+            default => '📅',
+        };
+    }
+}
+
+if (!function_exists('feed_event_type_label')) {
+    function feed_event_type_label(string $t): string
+    {
+        return match ($t) {
+            'training' => 'Тренировка', 'race' => 'Соревнование',
+            'meeting' => 'Встреча', default => 'Событие',
+        };
+    }
+}
+
 /* ============================================================
    ДЕРЕВО КОММЕНТАРИЕВ (СЕРВЕРНЫЙ РЕНДЕР)
+   Используется для полного рендера (не в ленте)
    ============================================================ */
 
 if (!function_exists('feed_build_comment_tree')) {
@@ -330,6 +472,68 @@ if (!function_exists('feed_render_comments')) {
     }
 }
 
+/**
+ * Плоский рендер последних 2 комментариев + кнопка «Ещё».
+ * Используется в ленте для активностей, постов и событий.
+ */
+if (!function_exists('feed_render_recent_comments')) {
+    function feed_render_recent_comments(
+        string $kind,
+        int $targetId,
+        array $comments,
+        int $totalCount,
+        string $moreUrl
+    ): string {
+        $shown = count($comments);
+        $hasMore = $totalCount > $shown;
+
+        if (!$comments && !$hasMore) return '';
+
+        $wrapperClass = match ($kind) {
+            'post'       => 'post-card__comments',
+            'club_event' => 'event-card__comments',
+            default      => 'activity-card__comments',
+        };
+
+        $html = '<div class="' . $wrapperClass . '">';
+
+        foreach ($comments as $c) {
+            $avatar = !empty($c['avatar_url'])
+                ? '<img src="' . e($c['avatar_url']) . '" alt="">'
+                : e(mb_substr((string)$c['display_name'], 0, 1));
+
+            $html .= '<div class="comment comment--compact">';
+            $html .= '<span class="avatar avatar--sm">' . $avatar . '</span>';
+            $html .= '<div class="comment__body">';
+            $html .= '<div class="comment__head">';
+            $html .= '<a href="' . e(url('profile.php?u=' . urlencode((string)$c['username']))) . '"><strong>' . e($c['display_name']) . '</strong></a>';
+            $html .= '<span class="comment__time muted">' . e(time_ago((string)$c['created_at'])) . '</span>';
+            $html .= '</div>';
+            $html .= '<div>' . nl2br(e((string)$c['body'])) . '</div>';
+            $html .= '</div></div>';
+        }
+
+        if ($hasMore) {
+            $left = $totalCount - $shown;
+            $html .= '<a class="comments-more" href="' . e($moreUrl) . '">Ещё ' . $left . ' ' . feed_plural_comments($left) . ' →</a>';
+        }
+
+        $html .= '</div>';
+        return $html;
+    }
+}
+
+if (!function_exists('feed_plural_comments')) {
+    function feed_plural_comments(int $n): string
+    {
+        $mod10 = $n % 10;
+        $mod100 = $n % 100;
+        if ($mod10 === 1 && $mod100 !== 11) return 'комментарий';
+        if ($mod10 >= 2 && $mod10 <= 4 && ($mod100 < 12 || $mod100 > 14)) return 'комментария';
+        return 'комментариев';
+    }
+}
+
 // ============================================================
 // ОСНОВНАЯ ЛОГИКА
 // ============================================================
@@ -380,34 +584,69 @@ try {
 }
 
 $activityIds = [];
-$postIds = [];
+$postIds     = [];
+$eventIds    = [];
 foreach ($rows as $r) {
-    if ($r['kind'] === 'activity') $activityIds[] = (int)$r['id'];
-    else $postIds[] = (int)$r['id'];
+    if ($r['kind'] === 'activity')       $activityIds[] = (int)$r['id'];
+    elseif ($r['kind'] === 'club_event') $eventIds[]    = (int)$r['id'];
+    else                                 $postIds[]     = (int)$r['id'];
 }
 
+// ---- Комментарии: последние 2 для каждой активности ----
 $commentsByActivity = [];
 if ($activityIds) {
     $ph = implode(',', array_fill(0, count($activityIds), '?'));
     $stmt = db()->prepare(
-        "SELECT c.*, u.username, u.display_name, u.avatar_url
-         FROM activity_comments c JOIN users u ON u.id = c.user_id
-         WHERE c.activity_id IN ($ph) ORDER BY c.created_at ASC"
+        "SELECT * FROM (
+            SELECT c.*, u.username, u.display_name, u.avatar_url,
+                   ROW_NUMBER() OVER (PARTITION BY c.activity_id ORDER BY c.created_at DESC) AS rn
+              FROM activity_comments c
+              JOIN users u ON u.id = c.user_id
+             WHERE c.activity_id IN ($ph)
+        ) t
+        WHERE rn <= 2
+        ORDER BY activity_id ASC, created_at ASC"
     );
     $stmt->execute($activityIds);
     foreach ($stmt->fetchAll() as $c) $commentsByActivity[(int)$c['activity_id']][] = $c;
 }
 
+// ---- Комментарии: последние 2 для каждого поста ----
 $commentsByPost = [];
 if ($postIds) {
     $ph = implode(',', array_fill(0, count($postIds), '?'));
     $stmt = db()->prepare(
-        "SELECT c.*, u.username, u.display_name, u.avatar_url
-         FROM post_comments c JOIN users u ON u.id = c.user_id
-         WHERE c.post_id IN ($ph) ORDER BY c.created_at ASC"
+        "SELECT * FROM (
+            SELECT c.*, u.username, u.display_name, u.avatar_url,
+                   ROW_NUMBER() OVER (PARTITION BY c.post_id ORDER BY c.created_at DESC) AS rn
+              FROM post_comments c
+              JOIN users u ON u.id = c.user_id
+             WHERE c.post_id IN ($ph)
+        ) t
+        WHERE rn <= 2
+        ORDER BY post_id ASC, created_at ASC"
     );
     $stmt->execute($postIds);
     foreach ($stmt->fetchAll() as $c) $commentsByPost[(int)$c['post_id']][] = $c;
+}
+
+// ---- Комментарии: последние 2 для каждого события ----
+$commentsByEvent = [];
+if ($eventIds) {
+    $ph = implode(',', array_fill(0, count($eventIds), '?'));
+    $stmt = db()->prepare(
+        "SELECT * FROM (
+            SELECT c.*, u.username, u.display_name, u.avatar_url,
+                   ROW_NUMBER() OVER (PARTITION BY c.event_id ORDER BY c.created_at DESC) AS rn
+              FROM club_event_comments c
+              JOIN users u ON u.id = c.user_id
+             WHERE c.event_id IN ($ph)
+        ) t
+        WHERE rn <= 2
+        ORDER BY event_id ASC, created_at ASC"
+    );
+    $stmt->execute($eventIds);
+    foreach ($stmt->fetchAll() as $c) $commentsByEvent[(int)$c['event_id']][] = $c;
 }
 
 $photosByPost = [];
@@ -471,6 +710,7 @@ try {
     $myStats['followers']  = (int)($stats['followers'] ?? 0);
     $myStats['following']  = (int)($stats['following'] ?? 0);
 } catch (Throwable $e) {}
+
 // ---- Последняя активность пользователя ----
 $lastActivity = null;
 try {
@@ -515,7 +755,7 @@ try {
     $myClubsCount = 0;
 }
 
-// ---- Клубы для правой колонки (все, а не только 8) ----
+// ---- Клубы для правой колонки ----
 $allMyClubs = [];
 try {
     $stmt = db()->prepare(
@@ -557,18 +797,15 @@ try {
 }
 
 // ============================================================
-// ТОП СПОРТСМЕНОВ СРЕДИ ПОДПИСОК (30 дней)
+// ТОП СПОРТСМЕНОВ, РЕКОМЕНДАЦИИ
 // ============================================================
 $topAthletes = [];
 try {
-    $topAthletes = User::topAthletesFor((int)$me['id'], 30, 5);
+    $topAthletes = User::topAthletesFor((int)$me['id'], 7, 3);
 } catch (Throwable $e) {
     $topAthletes = [];
 }
 
-// ============================================================
-// РЕКОМЕНДАЦИИ ПОДПИСОК
-// ============================================================
 $suggestedUsers = [];
 try {
     $suggestedUsers = User::suggestedFor((int)$me['id'], 5);
@@ -659,54 +896,38 @@ window.__CSRF__ = {$csrfJson};
         return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/\\x27/g,"&#39;");
     }
 
-    function buildCommentNode(c, tree, kind, targetId, depth) {
-        var children = tree[c.id] || [];
-        var av = c.avatar_url ? "<img src=\\"" + esc(c.avatar_url) + "\\" alt=\\"\\">" : esc(c.initial || "?");
-        var replyBtn = "<button type=\\"button\\" class=\\"comment__reply js-reply-btn\\" " +
-            "data-kind=\\"" + esc(kind) + "\\" " +
-            "data-target-id=\\"" + targetId + "\\" " +
-            "data-comment-id=\\"" + c.id + "\\" " +
-            "data-display-name=\\"" + esc(c.display_name) + "\\" " +
-            "title=\\"Ответить\\">↩ Ответить</button>";
+    function buildCommentsHtml(comments, kind, targetId, totalCount, moreUrl) {
+        if ((!comments || !comments.length) && !(totalCount > 0)) return "";
 
-        var html = "<div class=\\"comment " + (depth > 0 ? "comment--reply" : "") + "\\" " +
-            "id=\\"" + esc(kind) + "-comment-" + c.id + "\\" " +
-            "data-comment-id=\\"" + c.id + "\\">" +
-            "<span class=\\"avatar avatar--sm\\">" + av + "</span>" +
-            "<div class=\\"comment__body\\">" +
-                "<div class=\\"comment__head\\">" +
-                    "<a href=\\"" + esc(c.profile_url) + "\\"><strong>" + esc(c.display_name) + "</strong></a>" +
-                    "<span class=\\"comment__time muted\\">" + esc(c.time_ago) + "</span>" +
-                    replyBtn +
-                "</div>" +
-                "<div>" + esc(c.body).replace(/\\n/g, "<br>") + "</div>";
+        var cls = kind === "post" ? "post-card__comments"
+                : (kind === "club_event" ? "event-card__comments" : "activity-card__comments");
+        var out = "<div class=\\"" + cls + "\\">";
 
-        if (children.length) {
-            html += "<div class=\\"comment__children\\">";
-            children.forEach(function (ch) { html += buildCommentNode(ch, tree, kind, targetId, depth + 1); });
-            html += "</div>";
+        if (comments && comments.length) {
+            comments.forEach(function (c) {
+                var av = c.avatar_url ? "<img src=\\"" + esc(c.avatar_url) + "\\" alt=\\"\\">" : esc(c.initial || "?");
+                out +=
+                    "<div class=\\"comment comment--compact\\" data-comment-id=\\"" + c.id + "\\">" +
+                        "<span class=\\"avatar avatar--sm\\">" + av + "</span>" +
+                        "<div class=\\"comment__body\\">" +
+                            "<div class=\\"comment__head\\">" +
+                                "<a href=\\"" + esc(c.profile_url) + "\\"><strong>" + esc(c.display_name) + "</strong></a>" +
+                                "<span class=\\"comment__time muted\\">" + esc(c.time_ago) + "</span>" +
+                            "</div>" +
+                            "<div>" + esc(c.body).replace(/\\n/g, "<br>") + "</div>" +
+                        "</div>" +
+                    "</div>";
+            });
         }
 
-        html += "</div></div>";
-        return html;
-    }
+        var shown = (comments || []).length;
+        var left = totalCount - shown;
+        if (left > 0) {
+            out += "<a class=\\"comments-more\\" href=\\"" + esc(moreUrl) + "\\">Ещё " + left + " комментариев →</a>";
+        }
 
-    function buildCommentsHtml(comments, kind, targetId) {
-        if (!comments || !comments.length) return "";
-
-        var tree = {};
-        comments.forEach(function (c) {
-            var pid = (c.parent_id != null) ? parseInt(c.parent_id, 10) : 0;
-            if (!tree[pid]) tree[pid] = [];
-            tree[pid].push(c);
-        });
-        var roots = tree[0] || [];
-        if (!roots.length) return "";
-
-        var cls = kind === "activity" ? "activity-card__comments" : "post-card__comments";
-        var out = "<div class=\\"" + cls + "\\">";
-        roots.forEach(function (c) { out += buildCommentNode(c, tree, kind, targetId, 0); });
-        return out + "</div>";
+        out += "</div>";
+        return out;
     }
 
     function buildActivityGallery(photos) {
@@ -786,7 +1007,7 @@ window.__CSRF__ = {$csrfJson};
                 "<a class=\\"action\\" href=\\"" + a.url + "#comments\\"><span class=\\"action__icon\\">💬</span><span class=\\"js-comment-count\\">" + a.comments_count + "</span></a>" +
                 "<a class=\\"action\\" href=\\"" + a.url + "\\"><span class=\\"action__icon\\">🔗</span><span>Открыть</span></a>" +
             "</div>" +
-            buildCommentsHtml(a.comments, "activity", a.id) +
+            buildCommentsHtml(a.comments, "activity", a.id, a.comments_count, a.url + "#comments") +
             buildCommentForm("activity", a.id) +
         "</article>";
     }
@@ -816,8 +1037,35 @@ window.__CSRF__ = {$csrfJson};
                 "<a class=\\"action\\" href=\\"" + p.url + "#comments\\"><span class=\\"action__icon\\">💬</span><span class=\\"js-comment-count\\">" + p.comments_count + "</span></a>" +
                 "<a class=\\"action\\" href=\\"" + p.url + "\\"><span class=\\"action__icon\\">📖</span><span>Читать</span></a>" +
             "</div>" +
-            buildCommentsHtml(p.comments, "post", p.id) +
+            buildCommentsHtml(p.comments, "post", p.id, p.comments_count, p.url + "#comments") +
             buildCommentForm("post", p.id) +
+        "</article>";
+    }
+
+    function buildEventHtml(ev) {
+        var cover = ev.cover_url ? "<div class=\\"event-card__cover\\" style=\\"background-image:url('" + esc(ev.cover_url) + "')\\"></div>" : "";
+        var city = ev.city ? "<span class=\\"event-card__city\\">📍 " + esc(ev.city) + "</span>" : "";
+        var maxA = ev.max_attendees ? " / " + ev.max_attendees : "";
+        return "<article class=\\"event-card\\" id=\\"event-" + ev.id + "\\">" +
+            cover +
+            "<div class=\\"event-card__body\\">" +
+                "<div class=\\"event-card__head\\">" +
+                    "<a class=\\"event-card__type\\" href=\\"" + ev.url + "\\">" + ev.type_icon + " " + esc(ev.type_label) + "</a>" +
+                    "<a class=\\"event-card__club\\" href=\\"" + esc(ev.club_url) + "\\">" + esc(ev.club_name) + "</a>" +
+                "</div>" +
+                "<a href=\\"" + ev.url + "\\" class=\\"event-card__title-link\\"><h3 class=\\"event-card__title\\">" + esc(ev.title) + "</h3></a>" +
+                (ev.description ? "<div class=\\"event-card__description\\">" + esc(ev.description) + "</div>" : "") +
+                "<div class=\\"event-card__meta\\">" +
+                    "<span class=\\"event-card__date\\">📅 " + esc(ev.starts_at_formatted) + "</span>" +
+                    city +
+                    "<span class=\\"event-card__attendees\\">👥 " + ev.attendees_count + maxA + "</span>" +
+                "</div>" +
+                "<div class=\\"activity-card__actions\\">" +
+                    "<a class=\\"action\\" href=\\"" + ev.url + "#comments\\"><span class=\\"action__icon\\">💬</span><span class=\\"js-comment-count\\">" + ev.comments_count + "</span></a>" +
+                    "<a class=\\"action\\" href=\\"" + ev.url + "\\"><span class=\\"action__icon\\">🔗</span><span>Открыть</span></a>" +
+                "</div>" +
+                buildCommentsHtml(ev.comments, "club_event", ev.id, ev.comments_count, ev.url + "#comments") +
+            "</div>" +
         "</article>";
     }
 
@@ -837,8 +1085,14 @@ window.__CSRF__ = {$csrfJson};
             if (items.length) {
                 var html = "";
                 items.forEach(function (it) {
-                    if (it.kind === "activity") { window.__feedRegisterTrack(String(it.id), it.track || []); html += buildActivityHtml(it); }
-                    else html += buildPostHtml(it);
+                    if (it.kind === "activity") {
+                        window.__feedRegisterTrack(String(it.id), it.track || []);
+                        html += buildActivityHtml(it);
+                    } else if (it.kind === "club_event") {
+                        html += buildEventHtml(it);
+                    } else {
+                        html += buildPostHtml(it);
+                    }
                 });
                 listEl.insertAdjacentHTML("beforeend", html);
                 listEl.querySelectorAll(".feed-map[data-initialized=\\"0\\"]").forEach(function (el) { window.__feedInitMap(el); });
@@ -933,50 +1187,24 @@ window.__CSRF__ = {$csrfJson};
                 }
 
                 var av = c.avatar_url ? "<img src=\\"" + esc(c.avatar_url) + "\\" alt=\\"\\">" : esc(c.initial);
-                var replyBtn = "<button type=\\"button\\" class=\\"comment__reply js-reply-btn\\" " +
-                    "data-kind=\\"" + esc(kind) + "\\" " +
-                    "data-target-id=\\"" + id + "\\" " +
-                    "data-comment-id=\\"" + c.id + "\\" " +
-                    "data-display-name=\\"" + esc(c.display_name) + "\\" " +
-                    "title=\\"Ответить\\">↩ Ответить</button>";
-
                 var commentHtml =
-                    "<div class=\\"comment " + (c.parent_id ? "comment--reply" : "") + "\\" " +
-                        "id=\\"" + esc(kind) + "-comment-" + c.id + "\\" " +
-                        "data-comment-id=\\"" + c.id + "\\">" +
+                    "<div class=\\"comment comment--compact\\" data-comment-id=\\"" + c.id + "\\">" +
                         "<span class=\\"avatar avatar--sm\\">" + av + "</span>" +
                         "<div class=\\"comment__body\\">" +
                             "<div class=\\"comment__head\\">" +
                                 "<a href=\\"" + esc(c.profile_url) + "\\"><strong>" + esc(c.display_name) + "</strong></a>" +
                                 "<span class=\\"comment__time muted\\">" + esc(c.time_ago) + "</span>" +
-                                replyBtn +
                             "</div>" +
                             "<div>" + esc(c.body).replace(/\\n/g, "<br>") + "</div>" +
                         "</div>" +
                     "</div>";
 
-                if (c.parent_id) {
-                    var parentEl = card.querySelector(".comment[data-comment-id=\\"" + c.parent_id + "\\"]");
-                    if (parentEl) {
-                        var childrenWrap = parentEl.querySelector(":scope > .comment__body > .comment__children");
-                        if (!childrenWrap) {
-                            childrenWrap = document.createElement("div");
-                            childrenWrap.className = "comment__children";
-                            parentEl.querySelector(":scope > .comment__body").appendChild(childrenWrap);
-                        }
-                        childrenWrap.insertAdjacentHTML("beforeend", commentHtml);
-                    } else {
-                        container.insertAdjacentHTML("beforeend", commentHtml);
-                    }
-                } else {
-                    container.insertAdjacentHTML("beforeend", commentHtml);
-                }
+                container.insertAdjacentHTML("beforeend", commentHtml);
 
                 var counter = card.querySelector(".js-comment-count");
                 if (counter) counter.textContent = res.body.data.count;
 
                 input.value = "";
-
                 form.dataset.parentId = "";
                 var hint = form.querySelector(".comment-form__reply-hint");
                 if (hint) hint.hidden = true;
@@ -1381,9 +1609,6 @@ require __DIR__ . '/includes/header.php';
         </div>
     <?php endif; ?>
 
-
-<!-- Мини-календарь (отдельной карточкой) -->
-
     <div class="sidebar-calendar">
         <div class="sidebar-calendar__head">
             <?= e(profile_month_ru($calendarMonth)) ?> <?= (int)$calendarYear ?>
@@ -1417,7 +1642,7 @@ require __DIR__ . '/includes/header.php';
         <!-- Топ спортсменов -->
         <?php if ($topAthletes): ?>
             <div class="sidebar-card">
-                <h3 class="sidebar-card__title">🏆 Топ спортсменов</h3>
+                <h3 class="sidebar-card__title">🏆 Топ на этой неделе</h3>
                 <div class="sidebar-athletes">
                     <?php foreach ($topAthletes as $i => $ta): ?>
                         <a class="sidebar-athlete" href="<?= e(url('profile.php?u=' . urlencode((string)$ta['username']))) ?>">
@@ -1441,7 +1666,6 @@ require __DIR__ . '/includes/header.php';
             </div>
         <?php endif; ?>
 
-        
     </aside>
 
     <!-- ============================================================
@@ -1498,7 +1722,7 @@ require __DIR__ . '/includes/header.php';
                     <p>В подписках пока пусто.</p>
                     <a href="<?= e(url('search.php')) ?>" class="btn btn--primary">Найти людей</a>
                 <?php elseif ($tab === 'clubs'): ?>
-                    <p>В ваших клубах пока нет активностей.</p>
+                    <p>В ваших клубах пока нет активностей, постов и событий.</p>
                     <a href="<?= e(url('clubs.php')) ?>" class="btn btn--primary">Найти клубы</a>
                 <?php else: ?>
                     <p>В ленте пока нет записей.</p>
@@ -1510,6 +1734,7 @@ require __DIR__ . '/includes/header.php';
             <div class="feed__list" id="feed-list">
                 <?php foreach ($rows as $r): ?>
                     <?php $sortAt = (string)($r['sort_at'] ?? ''); ?>
+
                     <?php if ($r['kind'] === 'activity'): ?>
                         <?php
                             $aid = (int)$r['id'];
@@ -1521,6 +1746,8 @@ require __DIR__ . '/includes/header.php';
                             }
                             $effortCount = $effortCounts[$aid] ?? 0;
                             $effortList  = $effortsByActivity[$aid] ?? [];
+                            $comments    = $commentsByActivity[$aid] ?? [];
+                            $commentsTotal = (int)$r['comments_count'];
                         ?>
                         <article class="activity-card" id="activity-<?= $aid ?>">
                             <div class="activity-card__head">
@@ -1625,8 +1852,13 @@ require __DIR__ . '/includes/header.php';
                                 </a>
                             </div>
 
-                            <?php $cs = $commentsByActivity[$aid] ?? []; ?>
-                            <?= feed_render_comments('activity', $aid, $cs, (bool)$me) ?>
+                            <?= feed_render_recent_comments(
+                                    'activity',
+                                    $aid,
+                                    $comments,
+                                    $commentsTotal,
+                                    url('activity.php?id=' . $aid . '#comments')
+                                ) ?>
 
                             <form class="comment-form js-comment-form" data-kind="activity" data-id="<?= $aid ?>" data-parent-id="">
                                 <div class="comment-form__reply-hint" hidden>
@@ -1637,11 +1869,72 @@ require __DIR__ . '/includes/header.php';
                             </form>
                         </article>
 
+                    <?php elseif ($r['kind'] === 'club_event'): ?>
+                        <?php
+                            $eid = (int)$r['id'];
+                            $eventComments = $commentsByEvent[$eid] ?? [];
+                            $commentsTotal = (int)$r['comments_count'];
+                            $startsTs = strtotime((string)$r['event_starts_at']);
+                        ?>
+                        <article class="event-card" id="event-<?= $eid ?>">
+                            <?php if (!empty($r['event_cover_url'])): ?>
+                                <div class="event-card__cover" style="background-image:url('<?= e($r['event_cover_url']) ?>')"></div>
+                            <?php endif; ?>
+
+                            <div class="event-card__body">
+                                <div class="event-card__head">
+                                    <a class="event-card__type" href="<?= e(url('club-event.php?id=' . $eid)) ?>">
+                                        <?= e(feed_event_type_icon((string)$r['type'])) ?>
+                                        <?= e(feed_event_type_label((string)$r['type'])) ?>
+                                    </a>
+                                    <a class="event-card__club" href="<?= e(url('club.php?id=' . (int)$r['club_id'])) ?>">
+                                        <?= e($r['club_name']) ?>
+                                    </a>
+                                </div>
+
+                                <a href="<?= e(url('club-event.php?id=' . $eid)) ?>" class="event-card__title-link">
+                                    <h3 class="event-card__title"><?= e($r['title']) ?></h3>
+                                </a>
+
+                                <?php if (!empty($r['description'])): ?>
+                                    <div class="event-card__description"><?= nl2br(e(mb_substr((string)$r['description'], 0, 300))) ?><?= mb_strlen((string)$r['description']) > 300 ? '…' : '' ?></div>
+                                <?php endif; ?>
+
+                                <div class="event-card__meta">
+                                    <span class="event-card__date">📅 <?= e(date('d.m.Y H:i', $startsTs)) ?></span>
+                                    <?php if (!empty($r['event_city'])): ?>
+                                        <span class="event-card__city">📍 <?= e($r['event_city']) ?></span>
+                                    <?php endif; ?>
+                                    <span class="event-card__attendees">
+                                        👥 <?= (int)$r['event_attendees_count'] ?><?= $r['event_max_attendees'] ? ' / ' . (int)$r['event_max_attendees'] : '' ?>
+                                    </span>
+                                </div>
+
+                                <div class="activity-card__actions">
+                                    <a class="action" href="<?= e(url('club-event.php?id=' . $eid . '#comments')) ?>">
+                                        <span class="action__icon">💬</span><span class="js-comment-count"><?= $commentsTotal ?></span>
+                                    </a>
+                                    <a class="action" href="<?= e(url('club-event.php?id=' . $eid)) ?>">
+                                        <span class="action__icon">🔗</span><span>Открыть</span>
+                                    </a>
+                                </div>
+
+                                <?= feed_render_recent_comments(
+                                        'club_event',
+                                        $eid,
+                                        $eventComments,
+                                        $commentsTotal,
+                                        url('club-event.php?id=' . $eid . '#comments')
+                                    ) ?>
+                            </div>
+                        </article>
+
                     <?php else: ?>
                         <?php
                             $pid = (int)$r['id'];
                             $postPhotos = $photosByPost[$pid] ?? [];
                             $postComments = $commentsByPost[$pid] ?? [];
+                            $commentsTotal = (int)$r['comments_count'];
                         ?>
                         <article class="post-card" id="post-<?= $pid ?>">
                             <div class="post-card__head">
@@ -1695,7 +1988,13 @@ require __DIR__ . '/includes/header.php';
                                 </a>
                             </div>
 
-                            <?= feed_render_comments('post', $pid, $postComments, (bool)$me) ?>
+                            <?= feed_render_recent_comments(
+                                    'post',
+                                    $pid,
+                                    $postComments,
+                                    $commentsTotal,
+                                    url('post.php?id=' . $pid . '#comments')
+                                ) ?>
 
                             <form class="comment-form js-comment-form" data-kind="post" data-id="<?= $pid ?>" data-parent-id="">
                                 <div class="comment-form__reply-hint" hidden>
@@ -1725,7 +2024,6 @@ require __DIR__ . '/includes/header.php';
          ============================================================ -->
     <aside class="feed-rightbar">
 
-        <!-- Клубы -->
         <div class="rightbar-card rightbar-card--clubs">
             <h3 class="rightbar-card__title">Ваши клубы</h3>
             <?php if (!$allMyClubs): ?>
@@ -1756,7 +2054,6 @@ require __DIR__ . '/includes/header.php';
             <?php endif; ?>
         </div>
 
-        <!-- Рекомендации подписок -->
         <?php if ($suggestedUsers): ?>
             <div class="rightbar-card">
                 <h3 class="rightbar-card__title">РЕКОМЕНДАЦИИ</h3>
@@ -1788,7 +2085,6 @@ require __DIR__ . '/includes/header.php';
             </div>
         <?php endif; ?>
 
-        <!-- Копирайт-меню -->
         <div class="rightbar-card rightbar-card--footer">
             <nav class="rightbar-nav">
                 <a href="<?= e(url('calendar.php')) ?>">Календарь</a>

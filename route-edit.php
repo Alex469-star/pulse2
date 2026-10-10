@@ -12,14 +12,34 @@ require_once __DIR__ . '/services/GpxParser.php';
 auth_start();
 $me = require_login();
 
+$routeId = (int)($_GET['id'] ?? 0);
+if ($routeId <= 0) {
+    http_response_code(404);
+    exit('Маршрут не найден');
+}
+
+$route = Route::findById($routeId);
+if (!$route) {
+    http_response_code(404);
+    exit('Маршрут не найден');
+}
+
+if ((int)$route['user_id'] !== (int)$me['id']) {
+    http_response_code(403);
+    exit('Редактировать можно только свои маршруты');
+}
+
 $errors = [];
 $old = [
-    'name'        => '',
-    'description' => '',
-    'type'        => 'run',
-    'is_public'   => 1,
+    'name'        => (string)$route['name'],
+    'description' => (string)($route['description'] ?? ''),
+    'type'        => (string)$route['type'],
+    'is_public'   => (int)$route['is_public'],
 ];
 
+// ============================================================
+// POST: обновление
+// ============================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     csrf_check($_POST['csrf'] ?? null);
 
@@ -101,6 +121,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (Route::supportsWaypoints()) {
                 $routeData['waypoints_json'] = json_encode($cleanWaypoints, JSON_UNESCAPED_UNICODE);
             } elseif (!empty($cleanWaypoints)) {
+                // Fallback: складываем точки в описание
                 $notes = "\n\nТочки маршрута:\n";
                 foreach ($cleanWaypoints as $i => $w) {
                     $notes .= ($i + 1) . '. ';
@@ -111,9 +132,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $routeData['description'] = ($routeData['description'] ?? '') . $notes;
             }
 
-            $routeId = Route::create((int)$me['id'], $routeData);
+            Route::update($routeId, (int)$me['id'], $routeData);
 
-            flash('Маршрут «' . $old['name'] . '» сохранён', 'success');
+            flash('Маршрут «' . $old['name'] . '» обновлён', 'success');
             redirect(url('route.php?id=' . $routeId));
         } catch (Throwable $e) {
             $errors['_general'] = 'Не удалось сохранить: ' . $e->getMessage();
@@ -121,7 +142,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-$pageTitle = 'Новый маршрут';
+// ============================================================
+// ПАРСИНГ ДАННЫХ ДЛЯ ПРЕДЗАПОЛНЕНИЯ РЕДАКТОРА
+// ============================================================
+$track     = Route::parseTrack($route['track_json'] ?? null);
+$waypoints = Route::parseWaypoints($route['waypoints_json'] ?? null);
+
+// Сливаем трек + waypoints в единый список точек для редактора:
+// первые точки — начало/конец трека (для snap), waypoints — с именами
+$editorPoints = [];
+
+// Начало и конец трека как обычные точки
+if (count($track) >= 2) {
+    $editorPoints[] = [
+        'lat'  => $track[0]['lat'],
+        'lng'  => $track[0]['lng'],
+        'name' => '',
+        'note' => '',
+    ];
+    $editorPoints[] = [
+        'lat'  => $track[count($track) - 1]['lat'],
+        'lng'  => $track[count($track) - 1]['lng'],
+        'name' => '',
+        'note' => '',
+    ];
+}
+
+// Waypoints (с именами) вставляем между
+foreach ($waypoints as $w) {
+    $editorPoints[] = [
+        'lat'  => $w['lat'],
+        'lng'  => $w['lng'],
+        'name' => $w['name'],
+        'note' => $w['note'],
+    ];
+}
+
+$pageTitle = 'Редактировать маршрут: ' . $route['name'];
 
 $extraCss = [
     'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
@@ -135,7 +192,6 @@ $bodyClass = 'route-create-page';
 require __DIR__ . '/includes/header.php';
 ?>
 
-<!-- ПРАВИМ ЛЕЙАУТ: хедер виден, карта в main -->
 <style>
 body.route-create-page {
     display: flex;
@@ -276,7 +332,7 @@ body.route-create-page .route-map-full {
 <div class="route-prefs" id="prefs-menu" hidden>
     <div class="route-layers__title">Настройки</div>
     <label class="route-layers__item">
-        <input type="checkbox" id="pref-autosave" checked>
+        <input type="checkbox" id="pref-autosave">
         <span>Автосохранение черновика</span>
     </label>
     <label class="route-layers__item">
@@ -288,7 +344,7 @@ body.route-create-page .route-map-full {
 <!-- ЛЕВАЯ ПАНЕЛЬ -->
 <aside class="route-sidebar" id="route-sidebar">
     <div class="route-sidebar__head">
-        <h1 class="route-sidebar__title">Маршрут</h1>
+        <h1 class="route-sidebar__title">Редактирование</h1>
     </div>
 
     <div class="route-waypoints" id="route-waypoints">
@@ -299,13 +355,6 @@ body.route-create-page .route-map-full {
         <div class="route-search__row">
             <span class="route-search__icon">🔍</span>
             <input type="text" id="search-input" placeholder="Найти место" autocomplete="off">
-            <button type="button" class="route-search__geo" id="btn-search-geo" title="Вставить координаты">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
-                    <rect x="3" y="3" width="18" height="18" rx="2"/>
-                    <path d="M9 3v18"/>
-                    <path d="M15 3v18"/>
-                </svg>
-            </button>
         </div>
         <div class="route-search__results" id="search-results" hidden></div>
     </div>
@@ -449,10 +498,10 @@ body.route-create-page .route-map-full {
     </div>
 </div>
 
-<!-- МОДАЛКА СОХРАНЕНИЯ МАРШРУТА -->
+<!-- МОДАЛКА СОХРАНЕНИЯ -->
 <div class="route-modal" id="save-modal" hidden>
     <div class="route-modal__box route-modal__box--wide">
-        <h3 class="route-modal__title">Сохранить маршрут</h3>
+        <h3 class="route-modal__title">Сохранить изменения</h3>
 
         <form method="post" id="route-form" novalidate>
             <?= csrf_field() ?>
@@ -509,7 +558,7 @@ body.route-create-page .route-map-full {
     </div>
 </div>
 
-<!-- СКРИПТЫ: подключаем в правильном порядке после разметки -->
+<!-- СКРИПТЫ -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
@@ -520,8 +569,13 @@ window.__ROUTE_EDITOR__ = {
     elevationApi: <?= json_encode(url('api/elevation.php')) ?>,
     csrf: <?= json_encode(csrf_token()) ?>,
     defaultCenter: [55.751244, 37.618423],
-    mode: 'create',                    // ← добавить
-    initialData: null,                 // ← добавить
+    mode: 'edit',
+    routeId: <?= (int)$routeId ?>,
+    initialData: {
+        points:    <?= json_encode($editorPoints, JSON_UNESCAPED_UNICODE) ?>,
+        track:     <?= json_encode($track, JSON_UNESCAPED_UNICODE) ?>,
+        waypoints: <?= json_encode($waypoints, JSON_UNESCAPED_UNICODE) ?>
+    }
 };
 </script>
 <script src="<?= e(url('assets/js/route-editor.js')) ?>"></script>
