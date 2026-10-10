@@ -42,37 +42,145 @@
             var tabName = tab.dataset.tab;
             var url = new URL(location.href);
             url.searchParams.set("tab", tabName);
+
+            // Сбрасываем параметры чужих табов
+            if (tabName !== "events") {
+                url.searchParams.delete("event_scope");
+            } else {
+                url.searchParams.set("event_scope", "upcoming");
+            }
+            if (tabName !== "activities") {
+                url.searchParams.delete("act_page");
+            } else {
+                url.searchParams.set("act_page", "1");
+            }
+
             history.pushState({ tab: tabName }, "", url.toString());
 
             tabsEl.querySelectorAll(".feed-tab").forEach(function (el) {
                 el.classList.toggle("is-active", el.dataset.tab === tabName);
             });
 
-            mainEl.classList.add("is-loading");
-            fetch(location.pathname + "?" + url.searchParams.toString() + "&ajax=1", {
-                credentials: "same-origin",
-                headers: { "X-Requested-With": "XMLHttpRequest" }
-            })
-            .then(function (r) { return r.text(); })
-            .then(function (html) {
-                var doc = new DOMParser().parseFromString(html, "text/html");
-                var newMain = doc.getElementById("club-main");
-                if (newMain) {
-                    mainEl.innerHTML = newMain.innerHTML;
-                    initWall();
-                    initMaps();
-                }
-                mainEl.classList.remove("is-loading");
-            })
-            .catch(function (err) {
-                console.error(err);
-                mainEl.classList.remove("is-loading");
-            });
+            loadTabIntoMain(url, { tab: tabName });
         });
     }
 
+    /**
+     * Универсальная загрузка таба в #club-main.
+     */
+    function loadTabIntoMain(url) {
+        var main = document.getElementById("club-main");
+        if (!main) return;
+
+        main.classList.add("is-loading");
+        fetch(location.pathname + "?" + url.searchParams.toString() + "&ajax=1", {
+            credentials: "same-origin",
+            headers: { "X-Requested-With": "XMLHttpRequest" }
+        })
+        .then(function (r) { return r.text(); })
+        .then(function (html) {
+            var doc = new DOMParser().parseFromString(html, "text/html");
+            var newMain = doc.getElementById("club-main");
+            if (newMain) {
+                main.innerHTML = newMain.innerHTML;
+                initWall();
+                initMaps();
+                main.scrollIntoView({ behavior: "smooth", block: "start" });
+            }
+            main.classList.remove("is-loading");
+        })
+        .catch(function (err) {
+            console.error(err);
+            main.classList.remove("is-loading");
+        });
+    }
+
+    /* =========================================================
+       1b. ПОДТАБЫ СОБЫТИЙ (Предстоящие / Прошедшие)
+       Делегирование от document — переживает замену innerHTML.
+       ========================================================= */
+    document.addEventListener("click", function (e) {
+        var tab = e.target.closest("[data-event-scope]");
+        if (!tab) return;
+        if (!tab.closest("#club-main")) return;
+
+        e.preventDefault();
+
+        var scope = tab.dataset.eventScope;
+        var url = new URL(location.href);
+        url.searchParams.set("tab", "events");
+        url.searchParams.set("event_scope", scope);
+        url.searchParams.delete("act_page");
+        history.pushState({ tab: "events", eventScope: scope }, "", url.toString());
+
+        var subtabs = tab.closest(".feed-tabs");
+        if (subtabs) {
+            subtabs.querySelectorAll("[data-event-scope]").forEach(function (el) {
+                el.classList.toggle("is-active", el.dataset.eventScope === scope);
+            });
+        }
+
+        loadTabIntoMain(url);
+    });
+
+    /* =========================================================
+       1c. ПАГИНАЦИЯ АКТИВНОСТЕЙ
+       ========================================================= */
+    document.addEventListener("click", function (e) {
+        var pageLink = e.target.closest("[data-act-page]");
+        if (!pageLink) return;
+        if (!pageLink.closest("#club-main")) return;
+
+        e.preventDefault();
+
+        var page = parseInt(pageLink.dataset.actPage, 10);
+        if (!page || page < 1) return;
+
+        var url = new URL(location.href);
+        url.searchParams.set("tab", "activities");
+        url.searchParams.set("act_page", page);
+        url.searchParams.delete("event_scope");
+
+        history.pushState({ tab: "activities", actPage: page }, "", url.toString());
+
+        // Подсветка — сразу, чтобы не ждать AJAX
+        var pag = pageLink.closest(".pagination");
+        if (pag) {
+            pag.querySelectorAll(".pagination__item").forEach(function (el) {
+                el.classList.toggle("is-active",
+                    parseInt(el.dataset.actPage, 10) === page);
+            });
+        }
+
+        loadTabIntoMain(url);
+    });
+
+    /* =========================================================
+       POPSTATE — кнопка "назад"
+       ========================================================= */
     window.addEventListener("popstate", function (e) {
-        if (e.state && e.state.tab && tabsEl) {
+        if (!e.state) return;
+
+        if (e.state.tab === "events" && e.state.eventScope) {
+            var url = new URL(location.href);
+            document.querySelectorAll("[data-event-scope]").forEach(function (el) {
+                el.classList.toggle("is-active", el.dataset.eventScope === e.state.eventScope);
+            });
+            loadTabIntoMain(url);
+            return;
+        }
+
+        if (e.state.tab === "activities" && e.state.actPage) {
+            var url2 = new URL(location.href);
+            document.querySelectorAll("[data-act-page]").forEach(function (el) {
+                el.classList.toggle("is-active",
+                    parseInt(el.dataset.actPage, 10) === e.state.actPage);
+            });
+            loadTabIntoMain(url2);
+            return;
+        }
+
+        if (e.state.tab && tabsEl) {
             var t = tabsEl.querySelector('[data-tab="' + e.state.tab + '"]');
             if (t) t.click();
         }
@@ -163,7 +271,6 @@
         var list = document.getElementById("club-wall-list");
         if (!list) return;
 
-        // Форма нового поста
         var form = document.querySelector(".js-wall-form");
         if (form && !form.dataset.bound) {
             form.dataset.bound = "1";
@@ -201,7 +308,6 @@
     }
 
     function handleWallClick(e) {
-        // Меню «три точки»
         var menuBtn = e.target.closest("[data-menu-toggle]");
         if (menuBtn) {
             e.preventDefault();
@@ -210,7 +316,6 @@
             return;
         }
 
-        // Действия в меню
         var actionEl = e.target.closest("[data-action]");
         if (actionEl) {
             e.preventDefault();
@@ -229,7 +334,6 @@
             return;
         }
 
-        // Кнопка «Ответить» под постом или ответом
         var replyBtn = e.target.closest(".js-reply-btn");
         if (replyBtn) {
             e.preventDefault();
@@ -252,7 +356,6 @@
 
         var canEdit = container.dataset.canEdit === "1";
         var canDelete = container.dataset.canDelete === "1";
-        var isReply = container.classList.contains("club-wall-reply");
 
         var items = "";
         if (canEdit) items += '<button data-action="edit"><span>✏️</span>Редактировать</button>';
@@ -329,12 +432,6 @@
             });
     }
 
-    /**
-     * Открыть форму ответа.
-     * @param {number} rootPostId — ID корневого поста, куда вставляется ответ
-     * @param {number|null} replyToUserId — ID пользователя, которому адресован ответ
-     * @param {string} replyToName — имя для placeholder
-     */
     function openReplyForm(rootPostId, replyToUserId, replyToName) {
         var rootEl = document.querySelector('.club-wall-post[data-post-id="' + rootPostId + '"]');
         if (!rootEl) return;
@@ -347,7 +444,6 @@
             rootEl.querySelector(".club-wall-post__body").appendChild(replies);
         }
 
-        // Уже открыта — закрываем
         var existing = rootEl.querySelector(".club-wall-reply-form");
         if (existing) { existing.remove(); return; }
 
@@ -510,7 +606,6 @@
             closeAllMenus();
         }
     });
-})();
 
     /* =========================================================
        6. СКРОЛЛ К ПОСТУ ПО ХЕШУ
@@ -530,8 +625,8 @@
             return true;
         };
 
-        // Пробуем сразу, потом через 300ms (если AJAX-вкладка ещё грузится)
         if (!tryScroll()) {
             setTimeout(tryScroll, 300);
         }
     })();
+})();

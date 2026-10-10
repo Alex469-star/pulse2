@@ -14,22 +14,23 @@
     // СОСТОЯНИЕ
     // ============================================================
     var state = {
-        points: [],
-        snappedTrack: [],
-        elevation: [],
-        history: [],
-        historyIndex: -1,
-        savedPlaces: [],
-        editingIndex: null,
-        activePointIndex: null,
-        elevChart: null,
-        cursorMarker: null,
-        lastElevations: [],
-        lastLabels: [],
-        lastTrackPoints: [],
-        // Кэш высот: ключ "lat,lng" -> elevation
-        elevationCache: {},
-    };
+    points: [],
+    snappedTrack: [],
+    elevation: [],
+    history: [],
+    historyIndex: -1,
+    savedPlaces: [],
+    editingIndex: null,
+    activePointIndex: null,
+    elevChart: null,
+    cursorMarker: null,
+    lastElevations: [],
+    lastLabels: [],
+    lastTrackPoints: [],
+    elevationCache: {},
+    mode: CFG.mode || 'create',
+    routeId: CFG.routeId || 0,
+};
 
     var layers = {
         route: null,
@@ -560,15 +561,16 @@
     // АВТОСОХРАНЕНИЕ
     // ============================================================
     function autosave() {
-        var pref = document.getElementById("pref-autosave");
-        if (pref && !pref.checked) return;
-        try {
-            localStorage.setItem("pulse_route_draft", JSON.stringify({
-                points: state.points,
-                at: Date.now(),
-            }));
-        } catch (e) {}
-    }
+    if (state.mode === 'edit') return; // в редакторе не пересекаемся с новым маршрутом
+    var pref = document.getElementById("pref-autosave");
+    if (pref && !pref.checked) return;
+    try {
+        localStorage.setItem("pulse_route_draft", JSON.stringify({
+            points: state.points,
+            at: Date.now(),
+        }));
+    } catch (e) {}
+}
 
     function loadDraft() {
         try {
@@ -1392,14 +1394,94 @@
         });
     });
 
+        // ============================================================
+    // ЗАГРУЗКА СУЩЕСТВУЮЩЕГО МАРШРУТА (режим редактирования)
+    // ============================================================
+    function loadInitialRoute() {
+        var data = CFG.initialData;
+        if (!data || !Array.isArray(data.points) || data.points.length < 2) {
+            return false;
+        }
+
+        // 1. Точки для редактора (старт/финиш + waypoints)
+        state.points = data.points.map(function (p) {
+            return {
+                lat: parseFloat(p.lat),
+                lng: parseFloat(p.lng),
+                name: p.name || '',
+                note: p.note || '',
+            };
+        });
+
+        // 2. Готовый трек от OSRM не нужен — рисуем оригинальный
+        if (Array.isArray(data.track) && data.track.length >= 2) {
+            state.snappedTrack = data.track.map(function (p) {
+                var row = { lat: parseFloat(p.lat), lng: parseFloat(p.lng) };
+                if (typeof p.ele === 'number') row.ele = p.ele;
+                return row;
+            });
+        }
+
+        // 3. Рисуем полилинию
+        if (state.snappedTrack.length >= 2) {
+            if (layers.route) map.removeLayer(layers.route);
+            layers.route = L.polyline(
+                state.snappedTrack.map(function (p) { return [p.lat, p.lng]; }),
+                { color: "#0070c0", weight: 6, opacity: 0.9, lineCap: "round" }
+            ).addTo(map);
+
+            // Клик по линии — добавить точку в ближайший сегмент
+            layers.route.on("click", function (e) {
+                L.DomEvent.stopPropagation(e);
+                var idx = findClosestSegmentIndex(e.latlng);
+                state.points.splice(idx, 0, {
+                    lat: +e.latlng.lat.toFixed(6),
+                    lng: +e.latlng.lng.toFixed(6),
+                });
+                snapshot();
+                redrawMarkers();
+                fetchRoute();
+            });
+        }
+
+        // 4. Маркеры точек
+        redrawMarkers();
+
+        // 5. Подгоняем зум под весь маршрут
+        if (state.points.length) {
+            var bounds = L.latLngBounds(
+                state.points.map(function (p) { return [p.lat, p.lng]; })
+            );
+            map.fitBounds(bounds, { padding: [80, 80] });
+        }
+
+        // 6. Обновляем инфо
+        updateInfo();
+        updateDownloadButton();
+        updateElevationDebounced();
+        setStatus("Маршрут загружен для редактирования");
+
+        return true;
+    }
+
     // ============================================================
     // СТАРТ
     // ============================================================
-    if (loadDraft()) {
-        redrawMarkers();
-        fetchRoute();
+
+    if (state.mode === 'edit' && CFG.initialData) {
+        // Режим редактирования: загружаем существующий маршрут,
+        // черновик из localStorage игнорируем
+        loadInitialRoute();
+    } else {
+        // Режим создания: пробуем восстановить черновик
+        if (loadDraft()) {
+            redrawMarkers();
+            fetchRoute();
+        } else {
+            updateInfo();
+        }
     }
-    updateInfo();
+
     updateUndoButtons();
     loadSavedPlaces();
     snapshot();
