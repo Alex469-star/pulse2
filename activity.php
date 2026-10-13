@@ -588,6 +588,31 @@ if (!empty($activity['track_json'])) {
     }
 }
 
+// ============================================================
+// FALLBACK: если расчёт из трека не дал результата,
+// берём сохранённые значения из БД
+// ============================================================
+
+if ($calcDistanceM <= 0 && !empty($activity['distance_m'])) {
+    $calcDistanceM = (float)$activity['distance_m'];
+}
+
+if ($calcDurationSec <= 0 && !empty($activity['duration_sec'])) {
+    $calcDurationSec = (int)$activity['duration_sec'];
+}
+
+if ($calcAvgSpeedMps === null && !empty($activity['avg_speed_mps'])) {
+    $calcAvgSpeedMps = (float)$activity['avg_speed_mps'];
+}
+
+if ($calcAvgWithStopsMps === null && !empty($activity['avg_speed_mps'])) {
+    $calcAvgWithStopsMps = (float)$activity['avg_speed_mps'];
+}
+
+if ($calcStopTimeSec <= 0 && !empty($activity['stop_time_sec'])) {
+    $calcStopTimeSec = (int)$activity['stop_time_sec'];
+}
+
 $hasSensors = !empty($activity['has_sensors'])
     || $hrData || $pwrData || $cadData;
 
@@ -1448,7 +1473,7 @@ $aggTemp   = $activity['avg_temp_c']  ?? null;
                                         <span class="segment-row__crown" title="Лидер этого сегмента">👑</span>
                                     <?php endif; ?>
                                     <?php if (!empty($s['is_auto'])): ?>
-                                        <span class="segment-row__badge">авто</span>
+                                        <span class="segment-row__badge"></span>
                                     <?php endif; ?>
                                 </div>
                                 <div class="segment-row__meta muted">

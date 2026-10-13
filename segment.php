@@ -79,18 +79,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $me) {
     }
 }
 
-// ============================================================
-// АВТОМАТИЧЕСКИЙ МАТЧИНГ (не чаще раза в 5 минут)
-// ============================================================
-if ($me) {
-    try {
-        $autoKey = 'seg_matched_' . $segmentId;
-        if (empty($_SESSION[$autoKey]) || (time() - (int)$_SESSION[$autoKey]) > 300) {
-            SegmentMatcher::rematchUser((int)$me['id'], $segmentId);
-            $_SESSION[$autoKey] = time();
-        }
-    } catch (Throwable $e) {}
-}
+
 
 // ---- Данные для страницы ----
 $leaderboard = [];

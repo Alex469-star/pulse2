@@ -569,7 +569,7 @@ if (!in_array($tab, $allowedTabs, true)) $tab = 'all';
 $allowedTypes = ['', 'run', 'ride', 'swim', 'ski', 'walk', 'hike', 'other'];
 if (!in_array($type, $allowedTypes, true)) $type = '';
 
-$limit = 20;
+$limit = 10;
 $rows = [];
 $error = null;
 
@@ -973,7 +973,12 @@ window.__CSRF__ = {$csrfJson};
     }
 
     function buildActivityHtml(a) {
-        var track = (a.track && a.track.length >= 2) ? "<a href=\\"" + a.url + "\\" class=\\"activity-card__map-link\\"><div class=\\"feed-map\\" data-activity-id=\\"" + a.id + "\\" data-initialized=\\"0\\"></div></a>" : "";
+       var track = "";
+if (a.preview_url) {
+    track = "<a href=\\"" + a.url + "\\" class=\\"activity-card__map-link\\"><img src=\\"" + a.preview_url + "\\" alt=\\"\\" class=\\"feed-map-preview\\" loading=\\"lazy\\" width=\\"600\\" height=\\"300\\"></a>";
+} else if (a.track && a.track.length >= 2) {
+    track = "<a href=\\"" + a.url + "\\" class=\\"activity-card__map-link\\"><div class=\\"feed-map\\" data-activity-id=\\"" + a.id + "\\" data-initialized=\\"0\\"></div></a>";
+}
         var desc = (a.description && a.description.length) ? "<div class=\\"activity-card__description\\">" + esc(a.description).replace(/\\n/g,"<br>") + "</div>" : "";
         var vis = a.visibility === "private" ? "🔒" : (a.visibility === "followers" ? "👥" : "");
         var av = a.author.avatar_url ? "<img src=\\"" + esc(a.author.avatar_url) + "\\" alt=\\"\\">" : esc(a.author.initial);
@@ -1785,11 +1790,26 @@ require __DIR__ . '/includes/header.php';
                                 <div class="activity-card__description"><?= nl2br(e((string)$r['description'])) ?></div>
                             <?php endif; ?>
 
-                            <?php if ($hasTrack): ?>
-                                <a href="<?= e(url('activity.php?id=' . $aid)) ?>" class="activity-card__map-link">
-                                    <div class="feed-map" data-activity-id="<?= $aid ?>" data-initialized="0"></div>
-                                </a>
-                            <?php endif; ?>
+                            <?php
+    $previewUrl = null;
+    if ($hasTrack) {
+        require_once __DIR__ . '/services/TrackPreview.php';
+        $previewUrl = TrackPreview::urlFor($aid);
+    }
+?>
+<?php if ($previewUrl): ?>
+    <a href="<?= e(url('activity.php?id=' . $aid)) ?>" class="activity-card__map-link">
+        <img src="<?= e($previewUrl) ?>"
+             alt=""
+             class="feed-map-preview"
+             loading="lazy"
+             width="600" height="300">
+    </a>
+<?php elseif ($hasTrack): ?>
+    <a href="<?= e(url('activity.php?id=' . $aid)) ?>" class="activity-card__map-link">
+        <div class="feed-map" data-activity-id="<?= $aid ?>" data-initialized="0"></div>
+    </a>
+<?php endif; ?>
 
                             <?php if ($feedActPhotos): ?>
                                 <div class="feed-gallery" data-gallery>

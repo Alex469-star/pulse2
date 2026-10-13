@@ -70,6 +70,9 @@ if (!function_exists('notif_text')) {
         $message = (string)($n['message'] ?? '');
         $targetType = (string)($n['target_type'] ?? '');
 
+        // NEW: нормализуем переносы строк (Windows → Unix)
+        $message = str_replace(["\r\n", "\r"], "\n", $message);
+
         // Если это уведомление от клуба — оно может содержать текст от админа
         // с переносами строк. Рендерим с nl2br.
         if (strpos($targetType, 'club') === 0 && $message !== '') {

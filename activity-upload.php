@@ -12,7 +12,7 @@ $gearList = Gear::allForUser((int)$me['id']);
 $pageTitle = 'Загрузить активности';
 
 $extraJs = [
-    'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js',
+    url('assets/js/heic2any.min.js') . '?v=' . @filemtime(__DIR__ . '/assets/js/heic2any.min.js'),
     url('assets/js/upload-activity.js') . '?v=' . @filemtime(__DIR__ . '/assets/js/upload-activity.js'),
 ];
 
@@ -73,17 +73,22 @@ require __DIR__ . '/includes/header.php';
 
             <div class="form-row">
                 <div class="field">
-                    <label for="type">Тип активности</label>
-                    <select id="type" name="type">
-                        <option value="run">🏃 Бег</option>
-                        <option value="ride">🚴 Велосипед</option>
-                        <option value="swim">🏊 Плавание</option>
-                        <option value="ski">⛷️ Лыжи</option>
-                        <option value="walk">🚶 Ходьба</option>
-                        <option value="hike">🥾 Хайкинг</option>
-                        <option value="other">📦 Другое</option>
-                    </select>
-                </div>
+    <label for="type">Тип активности</label>
+    <select id="type" name="type">
+        <option value="auto" selected>✨ Определить автоматически</option>
+        <option value="run">🏃 Бег</option>
+        <option value="ride">🚴 Велосипед</option>
+        <option value="swim">🏊 Плавание</option>
+        <option value="ski">⛷️ Лыжи</option>
+        <option value="walk">🚶 Ходьба</option>
+        <option value="hike">🥾 Хайкинг</option>
+        <option value="other">📦 Другое</option>
+    </select>
+    <span class="field__hint">
+        Тип будет взят из файла (для TCX/FIT) или определён по скорости,
+        каденсу и мощности. Можно изменить после загрузки.
+    </span>
+</div>
 
                 <div class="field">
                     <label for="visibility">Кто видит</label>
