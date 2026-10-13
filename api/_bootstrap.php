@@ -1,6 +1,8 @@
 <?php
 declare(strict_types=1);
 
+
+
 ini_set('display_errors', '0'); // Не показывать в продакшене
 ini_set('log_errors', '1');
 error_reporting(E_ALL);
@@ -13,6 +15,8 @@ if (session_status() === PHP_SESSION_NONE) {
     session_name((string)config('session_name'));
     session_start();
 }
+
+
 
 // ---- Заголовки ----
 header('Content-Type: application/json; charset=utf-8');

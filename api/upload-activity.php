@@ -8,9 +8,35 @@ require_once __DIR__ . '/../services/GpxParser.php';
 require_once __DIR__ . '/../services/TcxParser.php';
 require_once __DIR__ . '/../services/FitParser.php';
 require_once __DIR__ . '/../services/SegmentMatcher.php';
+require_once __DIR__ . '/../services/ActivityTypeDetector.php';
 
 api_check_csrf();
 $me = api_require_user();
+
+// ============================================================
+// ТАЙМИНГ (временно, для отладки)
+// ============================================================
+$__t = [];
+$__t0 = microtime(true);
+$__mark = static function (string $name) use (&$__t, $__t0): void {
+    $__t[$name] = microtime(true) - $__t0;
+};
+$__dump = static function (string $label, array $extra = []) use (&$__t, $__t0): void {
+    $total = microtime(true) - $__t0;
+    $parts = [];
+    $prev = 0.0;
+    foreach ($__t as $k => $v) {
+        $parts[] = sprintf('%s=%.3f', $k, $v - $prev);
+        $prev = $v;
+    }
+    $parts[] = sprintf('TOTAL=%.3f', $total);
+    $line = $label . ' | ' . implode(' ', $parts);
+    if ($extra) {
+        $line .= ' | ' . json_encode($extra, JSON_UNESCAPED_UNICODE);
+    }
+    log_to_file('timing.log', $line);
+};
+// ============================================================
 
 $allowedExt = ['gpx', 'tcx', 'fit'];
 $maxSize    = 25 * 1024 * 1024;
@@ -35,14 +61,16 @@ if (!is_uploaded_file($file['tmp_name'])) {
     json_err('Файл не был загружен через HTTP', 400);
 }
 
+$__mark('start');
+
 $title      = trim((string)($_POST['title'] ?? ''));
-$type       = (string)($_POST['type'] ?? 'run');
+$rawType    = (string)($_POST['type'] ?? 'auto');
 $visibility = (string)($_POST['visibility'] ?? 'public');
 $gearId     = (int)($_POST['gear_id'] ?? 0);
 $isMulti    = !empty($_POST['is_multi']);
 
 $allowedTypes = ['run','ride','swim','ski','walk','hike','other'];
-if (!in_array($type, $allowedTypes, true)) $type = 'run';
+$manualType = in_array($rawType, $allowedTypes, true) ? $rawType : null;
 
 $allowedVisibility = ['public','followers','private'];
 if (!in_array($visibility, $allowedVisibility, true)) $visibility = 'public';
@@ -55,6 +83,8 @@ if ($gearId > 0) {
     }
 }
 
+$__mark('prepare');
+
 // ---- Парсинг ----
 try {
     $parsed = match ($ext) {
@@ -64,8 +94,32 @@ try {
         default => throw new RuntimeException('Неподдерживаемый формат'),
     };
 } catch (Throwable $ex) {
+    $__mark('parse_fail');
+    $__dump('FAIL', [
+        'file'  => $originalName,
+        'size'  => (int)$file['size'],
+        'ext'   => $ext,
+        'error' => $ex->getMessage(),
+    ]);
     json_err($ex->getMessage(), 400);
 }
+
+$__mark('parse');
+
+// ---- Автодетект типа ----
+$detectStart = microtime(true);
+if ($manualType === null) {
+    $type = ActivityTypeDetector::detect(
+        $parsed['source_type'] ?? null,
+        $parsed,
+        $originalName
+    );
+} else {
+    $type = $manualType;
+}
+$detectMs = (microtime(true) - $detectStart) * 1000;
+
+$__mark('detect');
 
 $points = $parsed['points'];
 if (count($points) > 20000) {
@@ -79,6 +133,8 @@ if (count($points) > 20000) {
     }
     $points = $reduced;
 }
+
+$__mark('reduce');
 
 $fileBase = pathinfo($originalName, PATHINFO_FILENAME);
 $finalTitle = $title !== ''
@@ -94,8 +150,12 @@ $fingerprint = Activity::fingerprint([
     'duration_sec' => $parsed['duration_sec'],
 ]);
 
+$__mark('fingerprint');
+
 $trackJsonEncoded = json_encode($points, JSON_UNESCAPED_UNICODE);
 $trackHash = Activity::trackHash($trackJsonEncoded);
+
+$__mark('trackhash');
 
 // ---- Проверка на дубликат ----
 $duplicate = Activity::findDuplicate((int)$me['id'], $fingerprint, $trackHash);
@@ -111,11 +171,23 @@ if ($duplicate !== null) {
          . ($reason === 'track_hash' ? ', трек совпадает' : '')
          . ')';
 
+    $__mark('duplicate');
+    $__dump('DUPLICATE', [
+        'file'      => $originalName,
+        'size'      => (int)$file['size'],
+        'type'      => $type,
+        'detect_ms' => round($detectMs, 2),
+        'points'    => count($points),
+        'track_kb'  => round(strlen($trackJsonEncoded) / 1024),
+    ]);
+
     json_err($msg, 409, [
         'duplicate_id'  => (int)$dup['id'],
         'duplicate_url' => url('activity.php?id=' . (int)$dup['id']),
     ]);
 }
+
+$__mark('duplicate_check');
 
 // ---- Сохранение ----
 try {
@@ -144,8 +216,21 @@ try {
         'has_sensors'      => $parsed['has_sensors'] ?? 0,
     ]);
 } catch (Throwable $ex) {
+    $__mark('create_fail');
+    $__dump('CREATE_FAIL', [
+        'file'     => $originalName,
+        'size'     => (int)$file['size'],
+        'type'     => $type,
+        'points'   => count($points),
+        'track_kb' => round(strlen($trackJsonEncoded) / 1024),
+        'error'    => $ex->getMessage(),
+    ]);
     json_err('Ошибка сохранения: ' . $ex->getMessage(), 500);
 }
+
+$__mark('create');
+
+
 
 // ---- Автоматический матчинг сегментов ----
 $matched = 0;
@@ -160,9 +245,24 @@ try {
     ));
 }
 
+$__mark('segments');
+
+$__dump('OK', [
+    'file'      => $originalName,
+    'size'      => (int)$file['size'],
+    'ext'       => $ext,
+    'type'      => $type,
+    'manual'    => $manualType !== null ? $manualType : 'auto',
+    'detect_ms' => round($detectMs, 2),
+    'points'    => count($points),
+    'track_kb'  => round(strlen($trackJsonEncoded) / 1024),
+    'matched'   => $matched,
+]);
+
 json_ok([
     'activity_id' => $activityId,
     'title'       => $finalTitle,
+    'detected_type' => $type,
     'summary'     => [
         'distance_m'       => $parsed['distance_m'],
         'duration_sec'     => $parsed['duration_sec'],

@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/_bootstrap.php';
 require_once __DIR__ . '/../models/Segment.php';
+require_once __DIR__ . '/../services/TrackPreview.php';
 
 $me = api_require_user();
 $userId = (int)$me['id'];
@@ -522,6 +523,12 @@ foreach ($rows as $r) {
             ? (int)$r['elevation_gain_m'] . ' м'
             : '—';
 
+                // ---- Превью трека (WebP, если сгенерировано) ----
+        $previewUrl = null;
+        if (count($track) >= 2) {
+            $previewUrl = TrackPreview::urlFor($aid);
+        }
+
         $items[] = [
             'kind'                 => 'activity',
             'id'                   => $aid,
@@ -549,6 +556,7 @@ foreach ($rows as $r) {
             'comments_count'       => (int)$r['comments_count'],
             'liked_by_me'          => (bool)$r['liked_by_me'],
             'track'                => $track,
+            'preview_url'          => $previewUrl,   // NEW
             'photos'               => array_map(function ($p) {
                 return ['url' => (string)$p['url']];
             }, $actPhotos),
