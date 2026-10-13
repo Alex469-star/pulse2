@@ -122,12 +122,12 @@ class Club
     {
         return match ($clubSportType) {
             'mixed' => [],  // пусто = все
-            'run'   => ['run'],
+            'run'   => ['run', 'walk', 'hike'],
             'ride'  => ['ride'],
             'swim'  => ['swim'],
             'ski'   => ['ski'],
-            'walk'  => ['walk', 'hike'],
-            'hike'  => ['hike', 'walk'],
+            'walk'  => ['run', 'walk', 'hike'],
+            'hike'  => ['run', 'hike', 'walk'],
             'other' => ['other'],
             default => [$clubSportType],
         };
