@@ -9,7 +9,25 @@ function config(?string $key = null)
     if ($config === null) {
         $config = require __DIR__ . '/../config/config.php';
     }
-    return $key === null ? $config : ($config[$key] ?? null);
+
+    if ($key === null) {
+        return $config;
+    }
+
+    // Поддержка вложенных ключей через точку: 'db.database', 'wahoo.client_id'
+    if (strpos($key, '.') !== false) {
+        $parts = explode('.', $key);
+        $value = $config;
+        foreach ($parts as $part) {
+            if (!is_array($value) || !array_key_exists($part, $value)) {
+                return null;
+            }
+            $value = $value[$part];
+        }
+        return $value;
+    }
+
+    return $config[$key] ?? null;
 }
 
 function e($value): string
@@ -424,4 +442,15 @@ function http_request(string $method, string $url, array $options = []): array
         'body'   => $response,
         'json'   => is_array($json) ? $json : null,
     ];
+}
+
+/**
+ * NEW: Нормализует тип активности к допустимому enum.
+ * Если тип невалиден — возвращает 'other'.
+ */
+function normalize_activity_type(?string $type): string
+{
+    $allowed = ['run','ride','swim','ski','walk','hike','other'];
+    $t = strtolower(trim((string)$type));
+    return in_array($t, $allowed, true) ? $t : 'other';
 }

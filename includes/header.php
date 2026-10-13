@@ -34,6 +34,12 @@ if ($me) {
     <?php foreach (($extraJs ?? []) as $js): ?>
         <script src="<?= e($js) ?>"></script>
     <?php endforeach; ?>
+    
+        <!-- Pulse Loader: глобальный индикатор загрузки -->
+    <script
+        src="<?= e(url('assets/js/pulse-loader.js')) ?>?v=<?= @filemtime(__DIR__ . '/../assets/js/pulse-loader.js') ?>"
+        data-css="<?= e(url('assets/css/pulse-loader.css')) ?>?v=<?= @filemtime(__DIR__ . '/../assets/css/pulse-loader.css') ?>"
+        defer></script>
 
     <script>window.__CSRF__ = <?= json_encode(csrf_token()) ?>;</script>
 </head>
