@@ -40,11 +40,20 @@
 
     /* ---------- Утилиты ---------- */
 
-    function setProgress(pct, text, hint) {
+        function setProgress(pct, text, hint) {
         if (progressBox) progressBox.hidden = false;
         if (progressBar) progressBar.style.width = Math.max(0, Math.min(100, pct)) + "%";
         if (progressText && text !== undefined) progressText.textContent = text;
         if (progressHint && hint !== undefined) progressHint.textContent = hint || "";
+
+        // NEW: синхронизируем с глобальным PulseLoader
+        if (window.PulseLoader) {
+            window.PulseLoader.show(
+                text || "Загрузка…",
+                hint || ""
+            );
+            window.PulseLoader.progress(Math.max(0, Math.min(100, pct)) / 100);
+        }
     }
 
     function resetProgress() {
@@ -277,17 +286,19 @@
                 return photoChain;
             });
         })
-        .then(function () {
+                .then(function () {
             setProgress(100, "Готово", "");
             setTimeout(function () {
                 setButtonLoading(false);
+                if (window.PulseLoader) window.PulseLoader.hide(); // NEW
                 renderResults(createdActivities, skippedActivities, errors);
             }, 300);
         })
-        .catch(function (err) {
+                .catch(function (err) {
             console.error(err);
             setButtonLoading(false);
             resetProgress();
+            if (window.PulseLoader) window.PulseLoader.hide(); // NEW
             renderError("Ошибка: " + err.message);
         });
     }

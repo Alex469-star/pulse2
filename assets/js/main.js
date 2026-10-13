@@ -349,8 +349,14 @@ document.querySelectorAll('.feature, .cta, .activity-card').forEach((el) => {
         lastUnread = count;
     }
 
-    function toastText(item) {
+        function toastText(item) {
         var actor = item.actor_name ? "<strong>" + escapeHtml(item.actor_name) + "</strong>" : "";
+
+        // NEW: хелпер — экранирует и превращает \n в <br>
+        function nl2brEsc(s) {
+            return escapeHtml(s).replace(/\n/g, "<br>");
+        }
+
         switch (item.type) {
             case "like":               return actor + " оценил вашу активность";
             case "comment":            return actor + " оставил комментарий";
@@ -362,12 +368,12 @@ document.querySelectorAll('.feature, .cta, .activity-card').forEach((el) => {
             case "post_comment_reply": return actor + " ответил на ваш комментарий к записи";
             case "segment_new_lead":   return "Вы вышли на <strong>1-е место</strong> на сегменте";
             case "segment_lost_lead":  return actor + " обошёл вас на сегменте";
-            case "club_join":          return escapeHtml(item.message || (actor + " вступил в клуб"));
-            case "club_post":          return escapeHtml(item.message || (actor + " написал на стене клуба"));
-            case "club_role":          return escapeHtml(item.message || "Ваша роль в клубе изменена");
-            case "club_event":         return escapeHtml(item.message || "Новое событие в клубе");
-            case "system":             return escapeHtml(item.message || "Системное уведомление");
-            default:                   return escapeHtml(item.message || "Уведомление");
+            case "club_join":          return nl2brEsc(item.message || (actor + " вступил в клуб"));
+            case "club_post":          return nl2brEsc(item.message || (actor + " написал на стене клуба"));
+            case "club_role":          return nl2brEsc(item.message || "Ваша роль в клубе изменена");
+            case "club_event":         return nl2brEsc(item.message || "Новое событие в клубе");
+            case "system":             return nl2brEsc(item.message || "Системное уведомление");
+            default:                   return nl2brEsc(item.message || "Уведомление");
         }
     }
 
