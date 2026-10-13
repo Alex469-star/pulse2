@@ -6,8 +6,12 @@ require_once __DIR__ . '/GpxParser.php';
 class FitParser
 {
     private const FIT_EPOCH = 631065600;
-    private const RECORD_GLOBAL_MSG_NUM = 20;
+    private const RECORD_GLOBAL_MSG_NUM  = 20;
+    private const SESSION_GLOBAL_MSG_NUM = 18; // NEW
 
+    /**
+     * // NEW: добавлено поле source_type — тип из session-месседжа FIT.
+     */
     public static function parse(string $filePath): array
     {
         if (!is_readable($filePath)) {
@@ -31,6 +35,8 @@ class FitParser
 
         $definitions = [];
         $points      = [];
+        $sourceType  = null; // NEW
+
         $pos = $dataStart;
 
         while ($pos < $dataEnd) {
@@ -78,6 +84,16 @@ class FitParser
             foreach ($def['fields'] as $f) $recordLen += $f['size'];
             if ($pos + $recordLen > $dataEnd) break;
 
+            // NEW: читаем session-месседж для определения типа
+            if ($def['globalNum'] === self::SESSION_GLOBAL_MSG_NUM) {
+                if ($sourceType === null) {
+                    $sessionType = self::readSessionSport($data, $pos, $def['fields']);
+                    if ($sessionType !== null) {
+                        $sourceType = $sessionType;
+                    }
+                }
+            }
+
             if ($def['globalNum'] === self::RECORD_GLOBAL_MSG_NUM) {
                 $point = self::readRecord($data, $pos, $def['fields']);
                 if ($point !== null) $points[] = $point;
@@ -93,8 +109,174 @@ class FitParser
             );
         }
 
-        return GpxParser::summarize($points);
+        $summary = GpxParser::summarize($points);
+        $summary['source_type'] = $sourceType; // NEW
+        return $summary;
     }
+
+    /**
+     * NEW: читает sport (field 5) и sub_sport (field 6) из session-месседжа.
+     * Возвращает строковое имя типа или null.
+     */
+    private static function readSessionSport(string $data, int $offset, array $fields): ?string
+    {
+        $sport    = null;
+        $subSport = null;
+
+        foreach ($fields as $f) {
+            $raw = substr($data, $offset, $f['size']);
+            $offset += $f['size'];
+            if (strlen($raw) !== $f['size']) return null;
+
+            // sport и sub_sport — enum, читаются как uint
+            if ($f['num'] === 5) {
+                $v = self::uintFromBytes($raw);
+                if ($v !== null && $v !== 0xFF) $sport = $v;
+            } elseif ($f['num'] === 6) {
+                $v = self::uintFromBytes($raw);
+                if ($v !== null && $v !== 0xFF) $subSport = $v;
+            }
+        }
+
+        if ($sport === null) return null;
+
+        return self::fitSportToString($sport, $subSport);
+    }
+
+    /**
+     * NEW: маппинг FIT sport/sub_sport enum → строковое имя.
+     *
+     * ВАЖНО: номера sub_sport сверяйте с FIT SDK:
+     * https://developer.garmin.com/fit/protocol/
+     * Маппинг ниже покрывает основные виды спорта; при сомнениях
+     * используйте только sport (без sub_sport).
+     */
+    private static function fitSportToString(int $sport, ?int $subSport): string
+    {
+        $map = [
+            0  => 'generic',
+            1  => 'running',
+            2  => 'cycling',
+            3  => 'transition',
+            4  => 'fitness_equipment',
+            5  => 'swimming',
+            6  => 'basketball',
+            7  => 'soccer',
+            8  => 'tennis',
+            9  => 'american_football',
+            10 => 'training',
+            11 => 'walking',
+            12 => 'cross_country_skiing',
+            13 => 'alpine_skiing',
+            14 => 'snowboarding',
+            15 => 'rowing',
+            16 => 'mountaineering',
+            17 => 'hiking',
+            18 => 'multisport',
+            19 => 'paddling',
+            20 => 'flying',
+            21 => 'e_biking',
+            22 => 'motorcycling',
+            23 => 'boating',
+            24 => 'driving',
+            25 => 'golf',
+            26 => 'hang_gliding',
+            27 => 'horseback_riding',
+            28 => 'hunting',
+            29 => 'fishing',
+            30 => 'inline_skating',
+            31 => 'rock_climbing',
+            32 => 'sailing',
+            33 => 'ice_skating',
+            34 => 'sky_diving',
+            35 => 'snowshoeing',
+            36 => 'snowmobiling',
+            37 => 'stand_up_paddleboarding',
+            38 => 'surfing',
+            39 => 'wakeboarding',
+            40 => 'water_skiing',
+            41 => 'kayaking',
+            42 => 'rafting',
+            43 => 'windsurfing',
+            44 => 'kitesurfing',
+            45 => 'tactical',
+            46 => 'jumpmaster',
+            47 => 'boxing',
+            48 => 'floor_climbing',
+            49 => 'baseball',
+            53 => 'diving',
+            62 => 'hiit',
+            64 => 'racket',
+            65 => 'wheelchair_push_walk',
+            66 => 'wheelchair_push_run',
+            67 => 'meditation',
+            76 => 'disc_golf',
+            77 => 'ultimate_disc',
+            80 => 'cricket',
+            81 => 'rugby',
+            82 => 'hockey',
+            83 => 'lacrosse',
+            84 => 'volleyball',
+            85 => 'water_tubing',
+            86 => 'wakesurfing',
+            254 => 'all',
+        ];
+
+        $name = $map[$sport] ?? 'generic';
+
+        // Уточнение по sub_sport для основных видов.
+        // Номера сверяйте с FIT SDK — они могут отличаться в разных версиях.
+        if ($subSport !== null) {
+            if ($sport === 1) { // running
+                $subRun = [
+                    0 => 'running',
+                    1 => 'treadmill_running',
+                    2 => 'street_running',
+                    3 => 'track_running',
+                    4 => 'trail_running',
+                    5 => 'trail_running',
+                    6 => 'trail_running',
+                    8 => 'indoor_running',
+                    9 => 'virtual_run',
+                ];
+                if (isset($subRun[$subSport])) $name = $subRun[$subSport];
+            } elseif ($sport === 2) { // cycling
+                $subCyc = [
+                    0 => 'cycling',
+                    1 => 'road_cycling',
+                    2 => 'road_cycling',
+                    3 => 'road_cycling',
+                    4 => 'road_cycling',
+                    5 => 'mountain_biking',
+                    6 => 'mountain_biking',
+                    7 => 'mountain_biking',
+                    8 => 'downhill_biking',
+                    9 => 'recumbent_biking',
+                    10 => 'cyclocross',
+                    11 => 'hand_cycling',
+                    12 => 'track_cycling',
+                    13 => 'indoor_cycling',
+                    14 => 'indoor_cycling',
+                    15 => 'virtual_ride',
+                    16 => 'virtual_ride',
+                ];
+                if (isset($subCyc[$subSport])) $name = $subCyc[$subSport];
+            } elseif ($sport === 5) { // swimming
+                $subSwim = [
+                    0 => 'swimming',
+                    1 => 'open_water_swimming',
+                    2 => 'open_water_swimming',
+                    3 => 'lap_swimming',
+                    4 => 'lap_swimming',
+                    5 => 'lap_swimming',
+                ];
+                if (isset($subSwim[$subSport])) $name = $subSwim[$subSport];
+            }
+        }
+
+        return $name;
+    }
+
 
     private static function readRecord(string $data, int $offset, array $fields): ?array
     {

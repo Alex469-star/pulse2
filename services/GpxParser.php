@@ -6,6 +6,8 @@ class GpxParser
     /**
      * Парсит GPX-файл.
      * Возвращает массив с точками, дистанцией, временем, скоростями и метриками датчиков.
+     *
+     * // NEW: добавлено поле source_type — тип из <trk><type> (если есть).
      */
     public static function parse(string $filePath): array
     {
@@ -26,8 +28,17 @@ class GpxParser
 
         $points = [];
 
+        // NEW: извлекаем тип из <trk><type>
+        $sourceType = null;
+
         if (isset($xml->trk)) {
             foreach ($xml->trk as $trk) {
+                // NEW: <type> внутри <trk>
+                if ($sourceType === null && isset($trk->type)) {
+                    $t = trim((string)$trk->type);
+                    if ($t !== '') $sourceType = $t;
+                }
+
                 foreach ($trk->trkseg as $seg) {
                     foreach ($seg->trkpt as $pt) {
                         $p = self::parsePoint($pt);
@@ -57,7 +68,9 @@ class GpxParser
             throw new RuntimeException('GPX: в файле не найдено ни одной точки (ни GPS, ни датчиков)');
         }
 
-        return self::summarize($points);
+        $summary = self::summarize($points);
+        $summary['source_type'] = $sourceType; // NEW
+        return $summary;
     }
 
     private static function parsePoint(SimpleXMLElement $pt): ?array

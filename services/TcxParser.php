@@ -5,6 +5,11 @@ require_once __DIR__ . '/GpxParser.php';
 
 class TcxParser
 {
+    /**
+     * Парсит TCX-файл.
+     *
+     * // NEW: добавлено поле source_type — тип из атрибута Sport у <Activity>.
+     */
     public static function parse(string $filePath): array
     {
         if (!is_readable($filePath)) {
@@ -24,8 +29,17 @@ class TcxParser
 
         $points = [];
 
+        // NEW: извлекаем Sport из <Activity Sport="...">
+        $sourceType = null;
+
         if (isset($xml->Activities)) {
             foreach ($xml->Activities->Activity as $activity) {
+                // NEW: атрибут Sport
+                if ($sourceType === null && isset($activity['Sport'])) {
+                    $s = trim((string)$activity['Sport']);
+                    if ($s !== '') $sourceType = $s;
+                }
+
                 foreach ($activity->Lap as $lap) {
                     foreach ($lap->Track as $track) {
                         foreach ($track->Trackpoint as $tp) {
@@ -52,7 +66,9 @@ class TcxParser
             throw new RuntimeException('TCX: не найдено ни одной точки (ни GPS, ни датчиков)');
         }
 
-        return GpxParser::summarize($points);
+        $summary = GpxParser::summarize($points);
+        $summary['source_type'] = $sourceType; // NEW
+        return $summary;
     }
 
     private static function parseTrackpoint(SimpleXMLElement $tp): ?array
