@@ -3843,7 +3843,7 @@ body {
     display: grid;
     grid-template-columns: 48px 1fr 20px;
     gap: 16px;
-    align-items: center;
+    align-items: start;
     padding: 16px 20px;
     text-decoration: none;
     color: inherit;
@@ -3893,6 +3893,7 @@ body {
     font-size: 20px;
     line-height: 1;
     border: 1px solid transparent;
+    margin-top: 2px;
     flex-shrink: 0;
 }
 
@@ -3974,6 +3975,7 @@ body {
     color: var(--text-soft);
     transition: transform .15s, color .15s;
     flex-shrink: 0;
+    margin-top: 14px;
 }
 
 .notif-row:hover .notif-row__arrow {
@@ -4060,6 +4062,9 @@ body {
     }
     .notif-row__text {
         font-size: 14px;
+        text-align: left;
+line-height: 1.5;
+word-break: break-word;
     }
     .notif-empty {
         padding: 48px 20px;
@@ -11062,5 +11067,22 @@ body:has(.hero-full) {
     .page-overlay__dot {
         animation: none !important;
         transition: none !important;
+    }
+}
+
+.feed-map-preview {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 220px;
+    object-fit: cover;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    background: #eef1f6;
+}
+
+@media (max-width: 560px) {
+    .feed-map-preview {
+        max-height: 180px;
     }
 }
